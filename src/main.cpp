@@ -2,14 +2,13 @@
 #include <string>
 #include <sstream>
 #include <vector>
-#include <unistd.h>   // fork(), execvp(), access()
+#include <unistd.h>   // fork(), execvp(), access(), getcwd()
 #include <sys/wait.h> // waitpid()
 #include <cstdlib>    // getenv()
-
 using namespace std;
 
 bool is_builtin(const string &cmd) {
-    return (cmd == "echo" || cmd == "exit" || cmd == "type");
+    return (cmd == "echo" || cmd == "exit" || cmd == "type" || cmd == "pwd");
 }
 
 string find_in_path(const string &cmd) {
@@ -53,6 +52,15 @@ int main() {
                 cout << parts[i] << (i + 1 < parts.size() ? " " : "\n");
         }
 
+        // pwd
+        else if (parts[0] == "pwd") {
+            char cwd[1024];
+            if (getcwd(cwd, sizeof(cwd)) != NULL)
+                cout << cwd << "\n";
+            else
+                perror("pwd");
+        }
+
         // type
         else if (parts[0] == "type") {
             if (parts.size() < 2) {
@@ -71,7 +79,7 @@ int main() {
             }
         }
 
-        // external program execution
+        // external commands
         else {
             string path = find_in_path(parts[0]);
             if (path.empty()) {
@@ -79,7 +87,7 @@ int main() {
                 continue;
             }
 
-            // Prepare argv
+            // prepare argv
             vector<char*> argv;
             for (auto &p : parts)
                 argv.push_back(&p[0]);
@@ -87,12 +95,10 @@ int main() {
 
             pid_t pid = fork();
             if (pid == 0) {
-                // child
                 execvp(argv[0], argv.data());
                 perror("execvp failed");
                 exit(1);
             } else if (pid > 0) {
-                // parent
                 int status;
                 waitpid(pid, &status, 0);
             } else {
@@ -100,6 +106,5 @@ int main() {
             }
         }
     }
-
     return 0;
 }
