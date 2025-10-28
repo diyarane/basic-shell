@@ -2,8 +2,10 @@
 #include <string>
 #include <sstream>
 #include <vector>
-#include <unistd.h> // for access()
-#include <cstdlib>  // for getenv()
+#include <unistd.h>   // fork(), execvp(), access()
+#include <sys/wait.h> // waitpid()
+#include <cstdlib>    // getenv()
+
 using namespace std;
 
 bool is_builtin(const string &cmd) {
@@ -11,6 +13,8 @@ bool is_builtin(const string &cmd) {
 }
 
 string find_in_path(const string &cmd) {
+    if (access(cmd.c_str(), X_OK) == 0) return cmd; // executable in current dir
+
     char *path_env = getenv("PATH");
     if (!path_env) return "";
 
@@ -34,6 +38,7 @@ int main() {
         string input;
         getline(cin, input);
 
+        // split input
         vector<string> parts;
         string word;
         stringstream ss(input);
@@ -42,11 +47,13 @@ int main() {
 
         if (input == "exit 0") return 0;
 
+        // echo
         else if (parts[0] == "echo") {
             for (size_t i = 1; i < parts.size(); ++i)
                 cout << parts[i] << (i + 1 < parts.size() ? " " : "\n");
         }
 
+        // type
         else if (parts[0] == "type") {
             if (parts.size() < 2) {
                 cout << "type: missing argument\n";
@@ -64,8 +71,34 @@ int main() {
             }
         }
 
-        else
-            cout << input << ": command not found\n";
+        // external program execution
+        else {
+            string path = find_in_path(parts[0]);
+            if (path.empty()) {
+                cout << parts[0] << ": command not found\n";
+                continue;
+            }
+
+            // Prepare argv
+            vector<char*> argv;
+            for (auto &p : parts)
+                argv.push_back(&p[0]);
+            argv.push_back(NULL);
+
+            pid_t pid = fork();
+            if (pid == 0) {
+                // child
+                execvp(argv[0], argv.data());
+                perror("execvp failed");
+                exit(1);
+            } else if (pid > 0) {
+                // parent
+                int status;
+                waitpid(pid, &status, 0);
+            } else {
+                perror("fork failed");
+            }
+        }
     }
 
     return 0;
