@@ -2,13 +2,15 @@
 #include <string>
 #include <sstream>
 #include <vector>
-#include <unistd.h>   // fork(), execvp(), access(), getcwd()
+#include <unistd.h>   // fork(), execvp(), access(), getcwd(), chdir()
 #include <sys/wait.h> // waitpid()
 #include <cstdlib>    // getenv()
+#include <cstring>    // strerror()
+
 using namespace std;
 
 bool is_builtin(const string &cmd) {
-    return (cmd == "echo" || cmd == "exit" || cmd == "type" || cmd == "pwd");
+    return (cmd == "echo" || cmd == "exit" || cmd == "type" || cmd == "pwd" || cmd == "cd");
 }
 
 string find_in_path(const string &cmd) {
@@ -37,7 +39,7 @@ int main() {
         string input;
         getline(cin, input);
 
-        // split input
+        // split input into words
         vector<string> parts;
         string word;
         stringstream ss(input);
@@ -59,6 +61,19 @@ int main() {
                 cout << cwd << "\n";
             else
                 perror("pwd");
+        }
+
+        // cd
+        else if (parts[0] == "cd") {
+            if (parts.size() < 2) {
+                const char* home = getenv("HOME");
+                if (home == NULL) home = "/";
+                if (chdir(home) != 0)
+                    cerr << "cd: " << home << ": " << strerror(errno) << "\n";
+            } else {
+                if (chdir(parts[1].c_str()) != 0)
+                    cerr << "cd: " << parts[1] << ": " << strerror(errno) << "\n";
+            }
         }
 
         // type
@@ -87,7 +102,6 @@ int main() {
                 continue;
             }
 
-            // prepare argv
             vector<char*> argv;
             for (auto &p : parts)
                 argv.push_back(&p[0]);
@@ -106,5 +120,6 @@ int main() {
             }
         }
     }
+
     return 0;
 }
