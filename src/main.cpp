@@ -198,8 +198,66 @@ string readLineWithCompletion() {
     string line;
     char ch;
     int tabPressCount = 0; // Track consecutive TAB presses
+    int historyIndex = commandHistory.size(); // Start beyond history (current line)
+    string currentLine; // Store the current line being typed before history navigation
 
     while (read(STDIN_FILENO, &ch, 1) == 1) {
+        // Handle escape sequences (arrow keys)
+        if (ch == '\x1b') { // ESC character
+            char seq[2];
+            if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
+            if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
+            
+            if (seq[0] == '[') {
+                if (seq[1] == 'A') { // Up arrow
+                    if (!commandHistory.empty()) {
+                        if (historyIndex == (int)commandHistory.size()) {
+                            // Save current line when starting history navigation
+                            currentLine = line;
+                        }
+                        if (historyIndex > 0) {
+                            historyIndex--;
+                            line = commandHistory[historyIndex];
+                            
+                            // Clear current line and display history entry
+                            write(STDOUT_FILENO, "\r$ ", 3);
+                            // Clear to end of line
+                            write(STDOUT_FILENO, "\033[K", 3);
+                            // Display the history entry
+                            write(STDOUT_FILENO, line.c_str(), line.length());
+                        }
+                    }
+                    continue;
+                } else if (seq[1] == 'B') { // Down arrow
+                    if (!commandHistory.empty()) {
+                        if (historyIndex < (int)commandHistory.size() - 1) {
+                            historyIndex++;
+                            line = commandHistory[historyIndex];
+                            
+                            // Clear current line and display history entry
+                            write(STDOUT_FILENO, "\r$ ", 3);
+                            // Clear to end of line
+                            write(STDOUT_FILENO, "\033[K", 3);
+                            // Display the history entry
+                            write(STDOUT_FILENO, line.c_str(), line.length());
+                        } else if (historyIndex == (int)commandHistory.size() - 1) {
+                            // Go back to the original current line
+                            historyIndex = commandHistory.size();
+                            line = currentLine;
+                            
+                            // Clear current line and display original line
+                            write(STDOUT_FILENO, "\r$ ", 3);
+                            // Clear to end of line
+                            write(STDOUT_FILENO, "\033[K", 3);
+                            // Display the original line
+                            write(STDOUT_FILENO, line.c_str(), line.length());
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+        
         if (ch == '\n') {
             write(STDOUT_FILENO, "\n", 1);
             tabPressCount = 0; // Reset on Enter
@@ -210,6 +268,8 @@ string readLineWithCompletion() {
                 write(STDOUT_FILENO, "\b \b", 3);
             }
             tabPressCount = 0; // Reset on any other key
+            historyIndex = commandHistory.size(); // Exit history navigation
+            currentLine.clear();
         } else if (ch == '\t') {  // Tab completion
             size_t lastSpace = line.find_last_of(' ');
             string currentWord = (lastSpace == string::npos) ? line : line.substr(lastSpace + 1);
@@ -257,10 +317,14 @@ string readLineWithCompletion() {
                 // If typing arguments, ignore TAB
                 tabPressCount = 0;
             }
+            historyIndex = commandHistory.size(); // Exit history navigation
+            currentLine.clear();
         } else if (ch >= 32 && ch < 127) {  // Printable characters
             line += ch;
             write(STDOUT_FILENO, &ch, 1);
             tabPressCount = 0; // reset on any other key
+            historyIndex = commandHistory.size(); // Exit history navigation
+            currentLine.clear();
         } else {
             tabPressCount = 0; // reset on any other key
         }
