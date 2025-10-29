@@ -39,7 +39,7 @@ int main() {
         string input;
         getline(cin, input);
 
-        // split input into words
+        // split input into parts
         vector<string> parts;
         string word;
         stringstream ss(input);
@@ -65,14 +65,17 @@ int main() {
 
         // cd
         else if (parts[0] == "cd") {
+            const char* home = getenv("HOME");
             if (parts.size() < 2) {
-                const char* home = getenv("HOME");
-                if (home == NULL) home = "/";
+                // cd with no args → go home
                 if (chdir(home) != 0)
                     cerr << "cd: " << home << ": " << strerror(errno) << "\n";
             } else {
-                if (chdir(parts[1].c_str()) != 0)
-                    cerr << "cd: " << parts[1] << ": " << strerror(errno) << "\n";
+                string path = parts[1];
+                // Handle ~ (home shortcut)
+                if (path == "~") path = home;
+                if (chdir(path.c_str()) != 0)
+                    cerr << "cd: " << path << ": " << strerror(errno) << "\n";
             }
         }
 
