@@ -222,29 +222,32 @@ string readLineWithCompletion() {
                     string completion = completions[0];
                     string toAdd = completion.substr(currentWord.size()) + " ";
                     line += toAdd;
-                    string output = toAdd;
-                    write(STDOUT_FILENO, output.c_str(), output.size());
+                    write(STDOUT_FILENO, toAdd.c_str(), toAdd.size());
                     tabPressCount = 0;
-                } 
-                else {
-                    // Multiple matches
-                    tabPressCount++;
-                    if (tabPressCount == 1) {
-                        // First TAB: ring bell
+                } else {
+                    // Multiple matches: complete to longest common prefix
+                    string lcp = findCommonPrefix(completions);
+                    if (lcp.size() > currentWord.size()) {
+                        string toAdd = lcp.substr(currentWord.size());
+                        line += toAdd;
+                        write(STDOUT_FILENO, toAdd.c_str(), toAdd.size());
+                    } else {
+                        // If no further completion possible, ring bell
                         write(STDOUT_FILENO, "\a", 1);
-                    } 
-                    else if (tabPressCount == 2) {
-                      // Second TAB: list matches (alphabetically sorted)
-                      sort(completions.begin(), completions.end());
-                      string output = "\n";
-                      for (const auto& comp : completions) {
-                          output += comp + "  ";
-                      }
-                      output += "\n$ " + line;
-                      write(STDOUT_FILENO, output.c_str(), output.size());
-                      tabPressCount = 0; // reset after showing
                     }
 
+                    tabPressCount++;
+                    if (tabPressCount == 2) {
+                        // Second TAB: list matches alphabetically
+                        sort(completions.begin(), completions.end());
+                        string output = "\n";
+                        for (const auto& comp : completions) {
+                            output += comp + "  ";
+                        }
+                        output += "\n$ " + line;
+                        write(STDOUT_FILENO, output.c_str(), output.size());
+                        tabPressCount = 0;
+                    }
                 }
             } else {
                 // If typing arguments, ignore TAB
@@ -261,6 +264,7 @@ string readLineWithCompletion() {
 
     return line;
 }
+
 
 
 int main() {
