@@ -2,11 +2,14 @@
 #include <string>
 #include <sstream>
 #include <vector>
+#include <fstream>
+#include <cstdlib>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <limits.h>
-#include <cstdlib>
-#include <fstream>
 
 using namespace std;
 
@@ -107,16 +110,47 @@ int main() {
         vector<string> args = parseInput(input);
         if (args.empty()) continue;
 
-        string cmd = args[0];
+        // Check for output redirection (> or 1>)
+        string redirectFile;
+        vector<string> cmdArgs;
+        bool hasRedirect = false;
+        
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (args[i] == ">" || args[i] == "1>") {
+                if (i + 1 < args.size()) {
+                    hasRedirect = true;
+                    redirectFile = args[i + 1];
+                    i++; // Skip the filename
+                }
+            } else {
+                cmdArgs.push_back(args[i]);
+            }
+        }
+        
+        if (cmdArgs.empty()) continue;
+        string cmd = cmdArgs[0];
 
         // exit
-        if (cmd == "exit" && args.size() == 2 && args[1] == "0") return 0;
+        if (cmd == "exit" && cmdArgs.size() == 2 && cmdArgs[1] == "0") return 0;
+
+        // Set up output redirection if needed
+        int saved_stdout = -1;
+        if (hasRedirect) {
+            saved_stdout = dup(STDOUT_FILENO);
+            int fd = open(redirectFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0) {
+                cerr << "Error opening file: " << redirectFile << "\n";
+                continue;
+            }
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+        }
 
         // echo
-        else if (cmd == "echo") {
-            for (size_t i = 1; i < args.size(); ++i) {
-                cout << args[i];
-                if (i != args.size() - 1) cout << " ";
+        if (cmd == "echo") {
+            for (size_t i = 1; i < cmdArgs.size(); ++i) {
+                cout << cmdArgs[i];
+                if (i != cmdArgs.size() - 1) cout << " ";
             }
             cout << "\n";
         }
@@ -128,8 +162,14 @@ int main() {
 
         // cd
         else if (cmd == "cd") {
-            if (args.size() < 2) continue;
-            string path = args[1];
+            if (cmdArgs.size() < 2) {
+                if (hasRedirect && saved_stdout >= 0) {
+                    dup2(saved_stdout, STDOUT_FILENO);
+                    close(saved_stdout);
+                }
+                continue;
+            }
+            string path = cmdArgs[1];
             if (path == "~") {
                 const char* home = getenv("HOME");
                 if (home) path = home;
@@ -142,8 +182,14 @@ int main() {
 
         // type
         else if (cmd == "type") {
-            if (args.size() < 2) continue;
-            string name = args[1];
+            if (cmdArgs.size() < 2) {
+                if (hasRedirect && saved_stdout >= 0) {
+                    dup2(saved_stdout, STDOUT_FILENO);
+                    close(saved_stdout);
+                }
+                continue;
+            }
+            string name = cmdArgs[1];
             if (name == "echo" || name == "exit" || name == "type" || name == "pwd" || name == "cd") {
                 cout << name << " is a shell builtin\n";
             } else {
@@ -158,20 +204,28 @@ int main() {
 
         // cat
         else if (cmd == "cat") {
-            if (args.size() < 2) continue;
-            for (size_t i = 1; i < args.size(); ++i) {
-                ifstream file(args[i].c_str());
+            if (cmdArgs.size() < 2) {
+                if (hasRedirect && saved_stdout >= 0) {
+                    dup2(saved_stdout, STDOUT_FILENO);
+                    close(saved_stdout);
+                }
+                continue;
+            }
+            for (size_t i = 1; i < cmdArgs.size(); ++i) {
+                ifstream file(cmdArgs[i].c_str());
                 if (!file.is_open()) {
-                    cerr << "cat: " << args[i] << ": No such file or directory\n";
+                    cerr << "cat: " << cmdArgs[i] << ": No such file or directory\n";
                     continue;
                 }
                 string line;
                 while (getline(file, line)) {
                     cout << line;
+                    if (!file.eof()) {
+                        cout << "\n";
+                    }
                 }
                 file.close();
             }
-            cout << "\n";
         }
 
         else {
@@ -180,26 +234,31 @@ int main() {
             
             if (programPath.empty()) {
                 cout << cmd << ": command not found\n";
-                continue;
-            }
-            
-            // Execute the program
-            pid_t pid = fork();
-            if (pid == 0) {
-                // Child process
-                vector<char*> execArgs;
-                for (size_t i = 0; i < args.size(); ++i) {
-                    execArgs.push_back(const_cast<char*>(args[i].c_str()));
+            } else {
+                // Execute the program
+                pid_t pid = fork();
+                if (pid == 0) {
+                    // Child process
+                    vector<char*> execArgs;
+                    for (size_t i = 0; i < cmdArgs.size(); ++i) {
+                        execArgs.push_back(const_cast<char*>(cmdArgs[i].c_str()));
+                    }
+                    execArgs.push_back(nullptr);
+                    
+                    execv(programPath.c_str(), execArgs.data());
+                    exit(1); // If execv fails
+                } else if (pid > 0) {
+                    // Parent process
+                    int status;
+                    waitpid(pid, &status, 0);
                 }
-                execArgs.push_back(nullptr);
-                
-                execv(programPath.c_str(), execArgs.data());
-                exit(1); // If execv fails
-            } else if (pid > 0) {
-                // Parent process
-                int status;
-                waitpid(pid, &status, 0);
             }
+        }
+        
+        // Restore stdout if it was redirected
+        if (hasRedirect && saved_stdout >= 0) {
+            dup2(saved_stdout, STDOUT_FILENO);
+            close(saved_stdout);
         }
     }
 
