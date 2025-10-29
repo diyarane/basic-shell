@@ -130,27 +130,33 @@ string readLineWithCompletion() {
                 cout << "\b \b" << flush;
             }
         } else if (ch == '\t') {  // Tab completion
-            // Find the last word (current command being typed)
+            // Find the current word being typed (last word after last space)
             size_t lastSpace = line.find_last_of(' ');
             string currentWord = (lastSpace == string::npos) ? line : line.substr(lastSpace + 1);
             
-            vector<string> completions = findCompletions(currentWord);
-            
-            if (completions.size() == 1) {
-                // Unique match - complete it and add a space
-                string completion = completions[0];
-                string toAdd = completion.substr(currentWord.length());
-                line += toAdd + " ";
-                cout << toAdd << " " << flush;
-            } else if (completions.size() > 1) {
-                // Multiple matches - show them
-                cout << "\n";
-                for (const auto& comp : completions) {
-                    cout << comp << "  ";
+            // Only try to complete if we're at the beginning (no space yet) - completing the command
+            if (lastSpace == string::npos && !currentWord.empty()) {
+                vector<string> completions = findCompletions(currentWord);
+                
+                if (completions.size() == 1) {
+                    // Unique match - complete it and add a space
+                    string completion = completions[0];
+                    string toAdd = completion.substr(currentWord.length());
+                    line += toAdd + " ";
+                    cout << toAdd << " " << flush;
+                } else if (completions.size() > 1) {
+                    // Multiple matches - show them
+                    cout << "\n";
+                    for (const auto& comp : completions) {
+                        cout << comp << "  ";
+                    }
+                    cout << "\n$ " << line << flush;
+                } else {
+                    // No completions - ring the bell
+                    cout << "\a" << flush;
                 }
-                cout << "\n$ " << line << flush;
             }
-            // If no completions, do nothing
+            // If we're typing arguments, tab does nothing
         } else if (ch >= 32 && ch < 127) {  // Printable characters
             line += ch;
             cout << ch << flush;
@@ -184,7 +190,10 @@ int main() {
         }
 
         vector<string> args = parseInput(input);
-        if (args.empty()) continue;
+        if (args.empty()) {
+            tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+            continue;
+        }
 
         // Check for output redirection (>, 1>, 2>, >>, 1>>, 2>>)
         string redirectStdoutFile;
@@ -236,7 +245,10 @@ int main() {
             }
         }
         
-        if (cmdArgs.empty()) continue;
+        if (cmdArgs.empty()) {
+            tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+            continue;
+        }
         string cmd = cmdArgs[0];
 
         // exit
@@ -252,6 +264,7 @@ int main() {
             int fd = open(redirectStdoutFile.c_str(), flags, 0644);
             if (fd < 0) {
                 cerr << "Error opening file: " << redirectStdoutFile << "\n";
+                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
                 continue;
             }
             dup2(fd, STDOUT_FILENO);
@@ -268,6 +281,7 @@ int main() {
                     dup2(saved_stdout, STDOUT_FILENO);
                     close(saved_stdout);
                 }
+                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
                 continue;
             }
             dup2(fd, STDERR_FILENO);
@@ -299,6 +313,7 @@ int main() {
                     dup2(saved_stderr, STDERR_FILENO);
                     close(saved_stderr);
                 }
+                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
                 continue;
             }
             string path = cmdArgs[1];
@@ -323,6 +338,7 @@ int main() {
                     dup2(saved_stderr, STDERR_FILENO);
                     close(saved_stderr);
                 }
+                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
                 continue;
             }
             string name = cmdArgs[1];
@@ -349,6 +365,7 @@ int main() {
                     dup2(saved_stderr, STDERR_FILENO);
                     close(saved_stderr);
                 }
+                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
                 continue;
             }
             for (size_t i = 1; i < cmdArgs.size(); ++i) {
