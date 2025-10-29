@@ -323,222 +323,242 @@ int main() {
             continue;
         }
 
-        // Handle dual-command pipeline
-        auto pipePos = find(args.begin(), args.end(), "|");
-        if (pipePos != args.end()) {
-            vector<string> cmd1(args.begin(), pipePos);
-            vector<string> cmd2(pipePos + 1, args.end());
+        // Helper function to check if a command is builtin
+        auto isBuiltin = [](const vector<string>& cmdArgs) -> bool {
+            if (cmdArgs.empty()) return false;
+            vector<string> builtins = getBuiltinCommands();
+            return find(builtins.begin(), builtins.end(), cmdArgs[0]) != builtins.end();
+        };
 
-            int fd[2];
-            if (pipe(fd) == -1) {
-                perror("pipe");
-                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-                continue;
-            }
-
-            // Helper function to check if a command is builtin
-            auto isBuiltin = [](const vector<string>& cmdArgs) -> bool {
-                if (cmdArgs.empty()) return false;
-                vector<string> builtins = getBuiltinCommands();
-                return find(builtins.begin(), builtins.end(), cmdArgs[0]) != builtins.end();
-            };
-
-            // Helper function to execute builtin command
-            auto executeBuiltin = [](const vector<string>& cmdArgs, int in_fd = -1, int out_fd = -1) {
-                if (cmdArgs.empty()) return;
-                
-                string cmd = cmdArgs[0];
-                int saved_stdin = -1, saved_stdout = -1;
-                
-                // Save original file descriptors
-                if (in_fd != -1) {
-                    saved_stdin = dup(STDIN_FILENO);
-                    dup2(in_fd, STDIN_FILENO);
-                    close(in_fd);
-                }
-                if (out_fd != -1) {
-                    saved_stdout = dup(STDOUT_FILENO);
-                    dup2(out_fd, STDOUT_FILENO);
-                    close(out_fd);
-                }
-
-                // Execute builtin
-                if (cmd == "echo") {
-                    for (size_t i = 1; i < cmdArgs.size(); ++i) {
-                        cout << cmdArgs[i]; 
-                        if (i != cmdArgs.size()-1) cout << " ";
-                    }
-                    cout << "\n";
-                } else if (cmd == "pwd") {
-                    cout << getCurrentDirectory() << "\n";
-                } else if (cmd == "cd") {
-                    if (cmdArgs.size() < 2) {
-                        const char* home = getenv("HOME");
-                        if (home) {
-                            if (chdir(home) != 0) {
-                                cerr << "cd: " << home << ": No such file or directory\n";
-                            }
-                        }
-                    } else {
-                        string path = cmdArgs[1];
-                        if (path == "~") {
-                            const char* home = getenv("HOME");
-                            if (home) path = home;
-                        }
-                        if (chdir(path.c_str()) != 0) {
-                            cerr << "cd: " << path << ": No such file or directory\n";
-                        }
-                    }
-                } else if (cmd == "type") {
-                    if (cmdArgs.size() < 2) { /* ignore */ }
-                    else {
-                        string name = cmdArgs[1];
-                        vector<string> builtins = getBuiltinCommands();
-                        if (find(builtins.begin(), builtins.end(), name) != builtins.end()) {
-                            cout << name << " is a shell builtin\n";
-                        } else {
-                            string path = findInPath(name);
-                            if (!path.empty()) {
-                                cout << name << " is " << path << "\n";
-                            } else {
-                                cout << name << ": not found\n";
-                            }
-                        }
-                    }
-                } else if (cmd == "cat") {
-                    if (cmdArgs.size() < 2) {
-                        // Read from stdin if no file specified
-                        string line;
-                        while (getline(cin, line)) {
-                            cout << line << "\n";
-                        }
-                    } else {
-                        for (size_t i = 1; i < cmdArgs.size(); ++i) {
-                            ifstream file(cmdArgs[i].c_str(), ios::binary);
-                            if (!file.is_open()) {
-                                cerr << "cat: " << cmdArgs[i] << ": No such file or directory\n";
-                                continue;
-                            }
-                            cout << file.rdbuf();
-                            file.close();
-                        }
-                    }
-                }
-
-                // Restore file descriptors
-                if (saved_stdin != -1) {
-                    dup2(saved_stdin, STDIN_FILENO);
-                    close(saved_stdin);
-                }
-                if (saved_stdout != -1) {
-                    dup2(saved_stdout, STDOUT_FILENO);
-                    close(saved_stdout);
-                }
-            };
-
-            pid_t pid1, pid2;
+        // Helper function to execute builtin command
+        auto executeBuiltin = [](const vector<string>& cmdArgs, int in_fd = -1, int out_fd = -1) {
+            if (cmdArgs.empty()) return;
             
-            // First command
-            if (isBuiltin(cmd1)) {
-                // Builtin command - execute directly in child process
-                pid1 = fork();
-                if (pid1 == 0) {
-                    close(fd[0]);
-                    executeBuiltin(cmd1, -1, fd[1]);
-                    close(fd[1]);
-                    exit(0);
+            string cmd = cmdArgs[0];
+            int saved_stdin = -1, saved_stdout = -1;
+            
+            // Save original file descriptors
+            if (in_fd != -1) {
+                saved_stdin = dup(STDIN_FILENO);
+                dup2(in_fd, STDIN_FILENO);
+                close(in_fd);
+            }
+            if (out_fd != -1) {
+                saved_stdout = dup(STDOUT_FILENO);
+                dup2(out_fd, STDOUT_FILENO);
+                close(out_fd);
+            }
+
+            // Execute builtin
+            if (cmd == "echo") {
+                for (size_t i = 1; i < cmdArgs.size(); ++i) {
+                    cout << cmdArgs[i]; 
+                    if (i != cmdArgs.size()-1) cout << " ";
                 }
-            } else {
-                // External command
-                pid1 = fork();
-                if (pid1 == 0) {
-                    close(fd[0]);
-                    dup2(fd[1], STDOUT_FILENO);
-                    close(fd[1]);
-                    executeCommand(cmd1);
-                    exit(0);
+                cout << "\n";
+            } else if (cmd == "pwd") {
+                cout << getCurrentDirectory() << "\n";
+            } else if (cmd == "cd") {
+                if (cmdArgs.size() < 2) {
+                    const char* home = getenv("HOME");
+                    if (home) {
+                        if (chdir(home) != 0) {
+                            cerr << "cd: " << home << ": No such file or directory\n";
+                        }
+                    }
+                } else {
+                    string path = cmdArgs[1];
+                    if (path == "~") {
+                        const char* home = getenv("HOME");
+                        if (home) path = home;
+                    }
+                    if (chdir(path.c_str()) != 0) {
+                        cerr << "cd: " << path << ": No such file or directory\n";
+                    }
+                }
+            } else if (cmd == "type") {
+                if (cmdArgs.size() < 2) { /* ignore */ }
+                else {
+                    string name = cmdArgs[1];
+                    vector<string> builtins = getBuiltinCommands();
+                    if (find(builtins.begin(), builtins.end(), name) != builtins.end()) {
+                        cout << name << " is a shell builtin\n";
+                    } else {
+                        string path = findInPath(name);
+                        if (!path.empty()) {
+                            cout << name << " is " << path << "\n";
+                        } else {
+                            cout << name << ": not found\n";
+                        }
+                    }
+                }
+            } else if (cmd == "cat") {
+                if (cmdArgs.size() < 2) {
+                    // Read from stdin if no file specified
+                    string line;
+                    while (getline(cin, line)) {
+                        cout << line << "\n";
+                    }
+                } else {
+                    for (size_t i = 1; i < cmdArgs.size(); ++i) {
+                        ifstream file(cmdArgs[i].c_str(), ios::binary);
+                        if (!file.is_open()) {
+                            cerr << "cat: " << cmdArgs[i] << ": No such file or directory\n";
+                            continue;
+                        }
+                        cout << file.rdbuf();
+                        file.close();
+                    }
                 }
             }
 
-            // Second command  
-            if (isBuiltin(cmd2)) {
-                // Builtin command - execute directly in child process
-                pid2 = fork();
-                if (pid2 == 0) {
-                    close(fd[1]);
-                    executeBuiltin(cmd2, fd[0], -1);
-                    close(fd[0]);
-                    exit(0);
+            // Restore file descriptors
+            if (saved_stdin != -1) {
+                dup2(saved_stdin, STDIN_FILENO);
+                close(saved_stdin);
+            }
+            if (saved_stdout != -1) {
+                dup2(saved_stdout, STDOUT_FILENO);
+                close(saved_stdout);
+            }
+        };
+
+        // Handle multi-command pipeline
+        vector<vector<string>> commands;
+        vector<string> currentCmd;
+        
+        for (const auto& arg : args) {
+            if (arg == "|") {
+                if (!currentCmd.empty()) {
+                    commands.push_back(currentCmd);
+                    currentCmd.clear();
                 }
             } else {
-                // External command
-                pid2 = fork();
-                if (pid2 == 0) {
-                    close(fd[1]);
-                    dup2(fd[0], STDIN_FILENO);
-                    close(fd[0]);
-                    executeCommand(cmd2);
-                    exit(0);
+                currentCmd.push_back(arg);
+            }
+        }
+        if (!currentCmd.empty()) {
+            commands.push_back(currentCmd);
+        }
+
+        // If we have multiple commands, handle as pipeline
+        if (commands.size() > 1) {
+            int numCommands = commands.size();
+            vector<pid_t> pids;
+            vector<vector<int>> pipes(numCommands - 1, vector<int>(2));
+
+            // Create all pipes
+            for (int i = 0; i < numCommands - 1; i++) {
+                if (pipe(pipes[i].data()) == -1) {
+                    perror("pipe");
+                    tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+                    continue;
                 }
             }
 
-            close(fd[0]);
-            close(fd[1]);
-            waitpid(pid1, nullptr, 0);
-            waitpid(pid2, nullptr, 0);
+            // Execute each command
+            for (int i = 0; i < numCommands; i++) {
+                pid_t pid = fork();
+                if (pid == 0) {
+                    // Child process
+                    
+                    // Set up input redirection (except for first command)
+                    if (i > 0) {
+                        dup2(pipes[i-1][0], STDIN_FILENO);
+                    }
+                    
+                    // Set up output redirection (except for last command)
+                    if (i < numCommands - 1) {
+                        dup2(pipes[i][1], STDOUT_FILENO);
+                    }
+                    
+                    // Close all pipe file descriptors in child
+                    for (int j = 0; j < numCommands - 1; j++) {
+                        close(pipes[j][0]);
+                        close(pipes[j][1]);
+                    }
+                    
+                    // Execute the command
+                    if (isBuiltin(commands[i])) {
+                        executeBuiltin(commands[i]);
+                        exit(0);
+                    } else {
+                        executeCommand(commands[i]);
+                        exit(1); // Should not reach here if exec succeeds
+                    }
+                } else if (pid > 0) {
+                    pids.push_back(pid);
+                } else {
+                    perror("fork");
+                }
+            }
+
+            // Close all pipe file descriptors in parent
+            for (int i = 0; i < numCommands - 1; i++) {
+                close(pipes[i][0]);
+                close(pipes[i][1]);
+            }
+
+            // Wait for all child processes
+            for (pid_t pid : pids) {
+                waitpid(pid, nullptr, 0);
+            }
+
             tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
             continue;
         }
 
-        // Handle output redirection (existing code for non-pipeline commands)
+        // Handle single command with output redirection (existing code)
         string redirectStdoutFile, redirectStderrFile;
         bool hasStdoutRedirect = false, hasStderrRedirect = false;
         bool appendStdout = false, appendStderr = false;
-        vector<string> cmdArgs;
+        vector<string> cmdArgs = commands.empty() ? args : commands[0];
 
-        for (size_t i = 0; i < args.size(); ++i) {
-            if (args[i] == ">" || args[i] == "1>") {
-                if (i + 1 < args.size()) {
+        // Parse redirections for single command
+        vector<string> filteredArgs;
+        for (size_t i = 0; i < cmdArgs.size(); ++i) {
+            if (cmdArgs[i] == ">" || cmdArgs[i] == "1>") {
+                if (i + 1 < cmdArgs.size()) {
                     hasStdoutRedirect = true;
                     appendStdout = false;
-                    redirectStdoutFile = args[i + 1];
+                    redirectStdoutFile = cmdArgs[i + 1];
                     i++;
                 }
-            } else if (args[i] == ">>" || args[i] == "1>>") {
-                if (i + 1 < args.size()) {
+            } else if (cmdArgs[i] == ">>" || cmdArgs[i] == "1>>") {
+                if (i + 1 < cmdArgs.size()) {
                     hasStdoutRedirect = true;
                     appendStdout = true;
-                    redirectStdoutFile = args[i + 1];
+                    redirectStdoutFile = cmdArgs[i + 1];
                     i++;
                 }
-            } else if (args[i] == "2>") {
-                if (i + 1 < args.size()) {
+            } else if (cmdArgs[i] == "2>") {
+                if (i + 1 < cmdArgs.size()) {
                     hasStderrRedirect = true;
                     appendStderr = false;
-                    redirectStderrFile = args[i + 1];
+                    redirectStderrFile = cmdArgs[i + 1];
                     i++;
                 }
-            } else if (args[i] == "2>>") {
-                if (i + 1 < args.size()) {
+            } else if (cmdArgs[i] == "2>>") {
+                if (i + 1 < cmdArgs.size()) {
                     hasStderrRedirect = true;
                     appendStderr = true;
-                    redirectStderrFile = args[i + 1];
+                    redirectStderrFile = cmdArgs[i + 1];
                     i++;
                 }
             } else {
-                cmdArgs.push_back(args[i]);
+                filteredArgs.push_back(cmdArgs[i]);
             }
         }
 
-        if (cmdArgs.empty()) {
+        if (filteredArgs.empty()) {
             tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
             continue;
         }
 
-        string cmd = cmdArgs[0];
+        string cmd = filteredArgs[0];
 
         // exit
-        if (cmd == "exit" && cmdArgs.size() == 2 && cmdArgs[1] == "0") return 0;
+        if (cmd == "exit" && filteredArgs.size() == 2 && filteredArgs[1] == "0") return 0;
 
         int saved_stdout = -1, saved_stderr = -1;
 
@@ -546,7 +566,11 @@ int main() {
             saved_stdout = dup(STDOUT_FILENO);
             int flags = O_WRONLY | O_CREAT | (appendStdout ? O_APPEND : O_TRUNC);
             int fd = open(redirectStdoutFile.c_str(), flags, 0644);
-            if (fd < 0) { cerr << "Error opening file: " << redirectStdoutFile << "\n"; tcsetattr(STDIN_FILENO, TCSANOW, &new_tio); continue; }
+            if (fd < 0) { 
+                cerr << "Error opening file: " << redirectStdoutFile << "\n"; 
+                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio); 
+                continue; 
+            }
             dup2(fd, STDOUT_FILENO);
             close(fd);
         }
@@ -555,52 +579,54 @@ int main() {
             saved_stderr = dup(STDERR_FILENO);
             int flags = O_WRONLY | O_CREAT | (appendStderr ? O_APPEND : O_TRUNC);
             int fd = open(redirectStderrFile.c_str(), flags, 0644);
-            if (fd < 0) { cerr << "Error opening file: " << redirectStderrFile << "\n"; if (saved_stdout>=0){dup2(saved_stdout,STDOUT_FILENO);close(saved_stdout);} tcsetattr(STDIN_FILENO, TCSANOW,&new_tio); continue; }
+            if (fd < 0) { 
+                cerr << "Error opening file: " << redirectStderrFile << "\n"; 
+                if (saved_stdout>=0) {
+                    dup2(saved_stdout, STDOUT_FILENO);
+                    close(saved_stdout);
+                } 
+                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio); 
+                continue; 
+            }
             dup2(fd, STDERR_FILENO);
             close(fd);
         }
 
         // Builtins (non-pipeline)
         if (cmd == "echo") {
-            for (size_t i = 1; i < cmdArgs.size(); ++i) {
-                cout << cmdArgs[i]; if (i != cmdArgs.size()-1) cout << " ";
+            for (size_t i = 1; i < filteredArgs.size(); ++i) {
+                cout << filteredArgs[i]; 
+                if (i != filteredArgs.size()-1) cout << " ";
             }
             cout << "\n";
         } else if (cmd == "pwd") {
             cout << getCurrentDirectory() << "\n";
         } else if (cmd == "cd") {
-            if (cmdArgs.size() < 2) {
+            if (filteredArgs.size() < 2) {
                 const char* home = getenv("HOME");
                 if (home) {
                     if (chdir(home) != 0) {
                         cerr << "cd: " << home << ": No such file or directory\n";
                     }
                 }
-                continue;
+            } else {
+                string path = filteredArgs[1];
+                if (path == "~") {
+                    const char* home = getenv("HOME");
+                    if (home) path = home;
+                }
+                if (chdir(path.c_str()) != 0) {
+                    cerr << "cd: " << path << ": No such file or directory\n";
+                }
             }
-
-            string path = cmdArgs[1];
-            if (path == "~") {
-                const char* home = getenv("HOME");
-                if (home) path = home;
-            }
-
-            if (chdir(path.c_str()) != 0) {
-                cerr << "cd: " << path << ": No such file or directory\n";
-            }
-        }
-        else if (cmd == "type") {
-            if (cmdArgs.size() < 2) { /* ignore */ }
+        } else if (cmd == "type") {
+            if (filteredArgs.size() < 2) { /* ignore */ }
             else {
-                string name = cmdArgs[1];
-                
-                // First check if it's a builtin command
+                string name = filteredArgs[1];
                 vector<string> builtins = getBuiltinCommands();
                 if (find(builtins.begin(), builtins.end(), name) != builtins.end()) {
                     cout << name << " is a shell builtin\n";
-                } 
-                // If not builtin, check if it's in PATH
-                else {
+                } else {
                     string path = findInPath(name);
                     if (!path.empty()) {
                         cout << name << " is " << path << "\n";
@@ -609,9 +635,8 @@ int main() {
                     }
                 }
             }
-        } 
-        else if (cmd == "cat") {
-            if (cmdArgs.size() < 2) {
+        } else if (cmd == "cat") {
+            if (filteredArgs.size() < 2) {
                 if (hasStdoutRedirect && saved_stdout >= 0) {
                     dup2(saved_stdout, STDOUT_FILENO);
                     close(saved_stdout);
@@ -624,23 +649,28 @@ int main() {
                 continue;
             }
 
-            for (size_t i = 1; i < cmdArgs.size(); ++i) {
-                ifstream file(cmdArgs[i].c_str(), ios::binary);
+            for (size_t i = 1; i < filteredArgs.size(); ++i) {
+                ifstream file(filteredArgs[i].c_str(), ios::binary);
                 if (!file.is_open()) {
-                    cerr << "cat: " << cmdArgs[i] << ": No such file or directory\n";
+                    cerr << "cat: " << filteredArgs[i] << ": No such file or directory\n";
                     continue;
                 }
                 cout << file.rdbuf();
                 file.close();
             }
-        }
-        else {
-            executeCommand(cmdArgs);
+        } else {
+            executeCommand(filteredArgs);
         }
 
         // Restore stdout/stderr
-        if (saved_stdout >= 0) { dup2(saved_stdout, STDOUT_FILENO); close(saved_stdout); }
-        if (saved_stderr >= 0) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
+        if (saved_stdout >= 0) { 
+            dup2(saved_stdout, STDOUT_FILENO); 
+            close(saved_stdout); 
+        }
+        if (saved_stderr >= 0) { 
+            dup2(saved_stderr, STDERR_FILENO); 
+            close(saved_stderr); 
+        }
 
         tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
     }
