@@ -336,22 +336,150 @@ int main() {
                 continue;
             }
 
-            pid_t pid1 = fork();
-            if (pid1 == 0) {
-                close(fd[0]);
-                dup2(fd[1], STDOUT_FILENO);
-                close(fd[1]);
-                executeCommand(cmd1);
-                exit(0);
+            // Helper function to check if a command is builtin
+            auto isBuiltin = [](const vector<string>& cmdArgs) -> bool {
+                if (cmdArgs.empty()) return false;
+                vector<string> builtins = getBuiltinCommands();
+                return find(builtins.begin(), builtins.end(), cmdArgs[0]) != builtins.end();
+            };
+
+            // Helper function to execute builtin command
+            auto executeBuiltin = [](const vector<string>& cmdArgs, int in_fd = -1, int out_fd = -1) {
+                if (cmdArgs.empty()) return;
+                
+                string cmd = cmdArgs[0];
+                int saved_stdin = -1, saved_stdout = -1;
+                
+                // Save original file descriptors
+                if (in_fd != -1) {
+                    saved_stdin = dup(STDIN_FILENO);
+                    dup2(in_fd, STDIN_FILENO);
+                    close(in_fd);
+                }
+                if (out_fd != -1) {
+                    saved_stdout = dup(STDOUT_FILENO);
+                    dup2(out_fd, STDOUT_FILENO);
+                    close(out_fd);
+                }
+
+                // Execute builtin
+                if (cmd == "echo") {
+                    for (size_t i = 1; i < cmdArgs.size(); ++i) {
+                        cout << cmdArgs[i]; 
+                        if (i != cmdArgs.size()-1) cout << " ";
+                    }
+                    cout << "\n";
+                } else if (cmd == "pwd") {
+                    cout << getCurrentDirectory() << "\n";
+                } else if (cmd == "cd") {
+                    if (cmdArgs.size() < 2) {
+                        const char* home = getenv("HOME");
+                        if (home) {
+                            if (chdir(home) != 0) {
+                                cerr << "cd: " << home << ": No such file or directory\n";
+                            }
+                        }
+                    } else {
+                        string path = cmdArgs[1];
+                        if (path == "~") {
+                            const char* home = getenv("HOME");
+                            if (home) path = home;
+                        }
+                        if (chdir(path.c_str()) != 0) {
+                            cerr << "cd: " << path << ": No such file or directory\n";
+                        }
+                    }
+                } else if (cmd == "type") {
+                    if (cmdArgs.size() < 2) { /* ignore */ }
+                    else {
+                        string name = cmdArgs[1];
+                        vector<string> builtins = getBuiltinCommands();
+                        if (find(builtins.begin(), builtins.end(), name) != builtins.end()) {
+                            cout << name << " is a shell builtin\n";
+                        } else {
+                            string path = findInPath(name);
+                            if (!path.empty()) {
+                                cout << name << " is " << path << "\n";
+                            } else {
+                                cout << name << ": not found\n";
+                            }
+                        }
+                    }
+                } else if (cmd == "cat") {
+                    if (cmdArgs.size() < 2) {
+                        // Read from stdin if no file specified
+                        string line;
+                        while (getline(cin, line)) {
+                            cout << line << "\n";
+                        }
+                    } else {
+                        for (size_t i = 1; i < cmdArgs.size(); ++i) {
+                            ifstream file(cmdArgs[i].c_str(), ios::binary);
+                            if (!file.is_open()) {
+                                cerr << "cat: " << cmdArgs[i] << ": No such file or directory\n";
+                                continue;
+                            }
+                            cout << file.rdbuf();
+                            file.close();
+                        }
+                    }
+                }
+
+                // Restore file descriptors
+                if (saved_stdin != -1) {
+                    dup2(saved_stdin, STDIN_FILENO);
+                    close(saved_stdin);
+                }
+                if (saved_stdout != -1) {
+                    dup2(saved_stdout, STDOUT_FILENO);
+                    close(saved_stdout);
+                }
+            };
+
+            pid_t pid1, pid2;
+            
+            // First command
+            if (isBuiltin(cmd1)) {
+                // Builtin command - execute directly in child process
+                pid1 = fork();
+                if (pid1 == 0) {
+                    close(fd[0]);
+                    executeBuiltin(cmd1, -1, fd[1]);
+                    close(fd[1]);
+                    exit(0);
+                }
+            } else {
+                // External command
+                pid1 = fork();
+                if (pid1 == 0) {
+                    close(fd[0]);
+                    dup2(fd[1], STDOUT_FILENO);
+                    close(fd[1]);
+                    executeCommand(cmd1);
+                    exit(0);
+                }
             }
 
-            pid_t pid2 = fork();
-            if (pid2 == 0) {
-                close(fd[1]);
-                dup2(fd[0], STDIN_FILENO);
-                close(fd[0]);
-                executeCommand(cmd2);
-                exit(0);
+            // Second command  
+            if (isBuiltin(cmd2)) {
+                // Builtin command - execute directly in child process
+                pid2 = fork();
+                if (pid2 == 0) {
+                    close(fd[1]);
+                    executeBuiltin(cmd2, fd[0], -1);
+                    close(fd[0]);
+                    exit(0);
+                }
+            } else {
+                // External command
+                pid2 = fork();
+                if (pid2 == 0) {
+                    close(fd[1]);
+                    dup2(fd[0], STDIN_FILENO);
+                    close(fd[0]);
+                    executeCommand(cmd2);
+                    exit(0);
+                }
             }
 
             close(fd[0]);
@@ -362,7 +490,7 @@ int main() {
             continue;
         }
 
-        // Handle output redirection
+        // Handle output redirection (existing code for non-pipeline commands)
         string redirectStdoutFile, redirectStderrFile;
         bool hasStdoutRedirect = false, hasStderrRedirect = false;
         bool appendStdout = false, appendStderr = false;
@@ -432,7 +560,7 @@ int main() {
             close(fd);
         }
 
-        // Builtins
+        // Builtins (non-pipeline)
         if (cmd == "echo") {
             for (size_t i = 1; i < cmdArgs.size(); ++i) {
                 cout << cmdArgs[i]; if (i != cmdArgs.size()-1) cout << " ";
@@ -440,10 +568,8 @@ int main() {
             cout << "\n";
         } else if (cmd == "pwd") {
             cout << getCurrentDirectory() << "\n";
-        } // cd
-        else if (cmd == "cd") {
+        } else if (cmd == "cd") {
             if (cmdArgs.size() < 2) {
-                // No argument: default to HOME
                 const char* home = getenv("HOME");
                 if (home) {
                     if (chdir(home) != 0) {
@@ -457,7 +583,6 @@ int main() {
             if (path == "~") {
                 const char* home = getenv("HOME");
                 if (home) path = home;
-                // If HOME is not set, just leave path as "~" so chdir will fail
             }
 
             if (chdir(path.c_str()) != 0) {
@@ -485,7 +610,6 @@ int main() {
                 }
             }
         } 
-        // cat
         else if (cmd == "cat") {
             if (cmdArgs.size() < 2) {
                 if (hasStdoutRedirect && saved_stdout >= 0) {
@@ -506,7 +630,7 @@ int main() {
                     cerr << "cat: " << cmdArgs[i] << ": No such file or directory\n";
                     continue;
                 }
-                cout << file.rdbuf(); // stream entire file content directly
+                cout << file.rdbuf();
                 file.close();
             }
         }
