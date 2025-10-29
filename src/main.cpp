@@ -110,16 +110,49 @@ int main() {
         vector<string> args = parseInput(input);
         if (args.empty()) continue;
 
-        // Check for output redirection (> or 1>)
-        string redirectFile;
+        // Check for output redirection (>, 1>, 2>, >>, 1>>, 2>>)
+        string redirectStdoutFile;
+        string redirectStderrFile;
+        bool hasStdoutRedirect = false;
+        bool hasStderrRedirect = false;
+        bool appendStdout = false;
+        bool appendStderr = false;
         vector<string> cmdArgs;
-        bool hasRedirect = false;
         
         for (size_t i = 0; i < args.size(); ++i) {
             if (args[i] == ">" || args[i] == "1>") {
                 if (i + 1 < args.size()) {
-                    hasRedirect = true;
-                    redirectFile = args[i + 1];
+                    hasStdoutRedirect = true;
+                    appendStdout = false;
+                    redirectStdoutFile = args[i + 1];
+                    i++; // Skip the filename
+                }
+            } else if (args[i] == ">>") {
+                if (i + 1 < args.size()) {
+                    hasStdoutRedirect = true;
+                    appendStdout = true;
+                    redirectStdoutFile = args[i + 1];
+                    i++; // Skip the filename
+                }
+            } else if (args[i] == "1>>") {
+                if (i + 1 < args.size()) {
+                    hasStdoutRedirect = true;
+                    appendStdout = true;
+                    redirectStdoutFile = args[i + 1];
+                    i++; // Skip the filename
+                }
+            } else if (args[i] == "2>") {
+                if (i + 1 < args.size()) {
+                    hasStderrRedirect = true;
+                    appendStderr = false;
+                    redirectStderrFile = args[i + 1];
+                    i++; // Skip the filename
+                }
+            } else if (args[i] == "2>>") {
+                if (i + 1 < args.size()) {
+                    hasStderrRedirect = true;
+                    appendStderr = true;
+                    redirectStderrFile = args[i + 1];
                     i++; // Skip the filename
                 }
             } else {
@@ -135,14 +168,33 @@ int main() {
 
         // Set up output redirection if needed
         int saved_stdout = -1;
-        if (hasRedirect) {
+        int saved_stderr = -1;
+        
+        if (hasStdoutRedirect) {
             saved_stdout = dup(STDOUT_FILENO);
-            int fd = open(redirectFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int flags = O_WRONLY | O_CREAT | (appendStdout ? O_APPEND : O_TRUNC);
+            int fd = open(redirectStdoutFile.c_str(), flags, 0644);
             if (fd < 0) {
-                cerr << "Error opening file: " << redirectFile << "\n";
+                cerr << "Error opening file: " << redirectStdoutFile << "\n";
                 continue;
             }
             dup2(fd, STDOUT_FILENO);
+            close(fd);
+        }
+        
+        if (hasStderrRedirect) {
+            saved_stderr = dup(STDERR_FILENO);
+            int flags = O_WRONLY | O_CREAT | (appendStderr ? O_APPEND : O_TRUNC);
+            int fd = open(redirectStderrFile.c_str(), flags, 0644);
+            if (fd < 0) {
+                cerr << "Error opening file: " << redirectStderrFile << "\n";
+                if (hasStdoutRedirect && saved_stdout >= 0) {
+                    dup2(saved_stdout, STDOUT_FILENO);
+                    close(saved_stdout);
+                }
+                continue;
+            }
+            dup2(fd, STDERR_FILENO);
             close(fd);
         }
 
@@ -163,9 +215,13 @@ int main() {
         // cd
         else if (cmd == "cd") {
             if (cmdArgs.size() < 2) {
-                if (hasRedirect && saved_stdout >= 0) {
+                if (hasStdoutRedirect && saved_stdout >= 0) {
                     dup2(saved_stdout, STDOUT_FILENO);
                     close(saved_stdout);
+                }
+                if (hasStderrRedirect && saved_stderr >= 0) {
+                    dup2(saved_stderr, STDERR_FILENO);
+                    close(saved_stderr);
                 }
                 continue;
             }
@@ -183,9 +239,13 @@ int main() {
         // type
         else if (cmd == "type") {
             if (cmdArgs.size() < 2) {
-                if (hasRedirect && saved_stdout >= 0) {
+                if (hasStdoutRedirect && saved_stdout >= 0) {
                     dup2(saved_stdout, STDOUT_FILENO);
                     close(saved_stdout);
+                }
+                if (hasStderrRedirect && saved_stderr >= 0) {
+                    dup2(saved_stderr, STDERR_FILENO);
+                    close(saved_stderr);
                 }
                 continue;
             }
@@ -205,9 +265,13 @@ int main() {
         // cat
         else if (cmd == "cat") {
             if (cmdArgs.size() < 2) {
-                if (hasRedirect && saved_stdout >= 0) {
+                if (hasStdoutRedirect && saved_stdout >= 0) {
                     dup2(saved_stdout, STDOUT_FILENO);
                     close(saved_stdout);
+                }
+                if (hasStderrRedirect && saved_stderr >= 0) {
+                    dup2(saved_stderr, STDERR_FILENO);
+                    close(saved_stderr);
                 }
                 continue;
             }
@@ -255,10 +319,14 @@ int main() {
             }
         }
         
-        // Restore stdout if it was redirected
-        if (hasRedirect && saved_stdout >= 0) {
+        // Restore stdout and stderr if they were redirected
+        if (hasStdoutRedirect && saved_stdout >= 0) {
             dup2(saved_stdout, STDOUT_FILENO);
             close(saved_stdout);
+        }
+        if (hasStderrRedirect && saved_stderr >= 0) {
+            dup2(saved_stderr, STDERR_FILENO);
+            close(saved_stderr);
         }
     }
 
