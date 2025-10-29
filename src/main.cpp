@@ -21,6 +21,42 @@ using namespace std;
 vector<string> commandHistory;
 // Track the last index that was written to file for append operations
 size_t lastWrittenIndex = 0;
+// History file path from environment variable
+string historyFilePath;
+
+// Helper function to load history from file on startup
+void loadHistoryFromFile() {
+    const char* histfile = getenv("HISTFILE");
+    if (!histfile) return;
+    
+    historyFilePath = histfile;
+    ifstream file(historyFilePath);
+    if (file.is_open()) {
+        string line;
+        while (getline(file, line)) {
+            // Skip empty lines
+            if (!line.empty()) {
+                commandHistory.push_back(line);
+            }
+        }
+        file.close();
+        // Update lastWrittenIndex to include the loaded commands
+        lastWrittenIndex = commandHistory.size();
+    }
+}
+
+// Helper function to save history to file on exit
+void saveHistoryToFile() {
+    if (historyFilePath.empty()) return;
+    
+    ofstream file(historyFilePath);
+    if (file.is_open()) {
+        for (const auto& command : commandHistory) {
+            file << command << "\n";
+        }
+        file.close();
+    }
+}
 
 // Helper function to parse quoted and unquoted words
 vector<string> parseInput(const string &input) {
@@ -370,6 +406,9 @@ int main() {
     cout << unitbuf;
     cerr << unitbuf;
 
+    // Load history from HISTFILE on startup
+    loadHistoryFromFile();
+
     struct termios old_tio, new_tio;
     tcgetattr(STDIN_FILENO, &old_tio);
     new_tio = old_tio;
@@ -689,8 +728,24 @@ int main() {
 
         string cmd = filteredArgs[0];
 
-        // exit
-        if (cmd == "exit" && filteredArgs.size() == 2 && filteredArgs[1] == "0") return 0;
+        // exit - save history before exiting
+        if (cmd == "exit") {
+            int exitCode = 0;
+            if (filteredArgs.size() >= 2) {
+                try {
+                    exitCode = stoi(filteredArgs[1]);
+                } catch (const exception& e) {
+                    // If argument is not a valid number, ignore it
+                }
+            }
+            
+            // Save history to HISTFILE before exiting
+            saveHistoryToFile();
+            
+            // Restore terminal settings
+            tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
+            return exitCode;
+        }
 
         int saved_stdout = -1, saved_stderr = -1;
 
@@ -860,6 +915,8 @@ int main() {
         tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
     }
 
+    // Save history to HISTFILE before normal program termination
+    saveHistoryToFile();
     tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
     return 0;
 }
