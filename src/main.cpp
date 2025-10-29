@@ -2,30 +2,66 @@
 #include <string>
 #include <sstream>
 #include <vector>
-#include <unistd.h>   // fork(), execvp(), access(), getcwd(), chdir()
-#include <sys/wait.h> // waitpid()
-#include <cstdlib>    // getenv()
-#include <cstring>    // strerror()
+#include <unistd.h>
+#include <sys/wait.h>
+#include <limits.h>
+#include <cstdlib>
+#include <fstream>
 
 using namespace std;
 
-bool is_builtin(const string &cmd) {
-    return (cmd == "echo" || cmd == "exit" || cmd == "type" || cmd == "pwd" || cmd == "cd");
+// Helper function to parse quoted and unquoted words
+vector<string> parseInput(const string &input) {
+    vector<string> args;
+    string current;
+    bool inQuotes = false;
+    char quoteChar = '\0';
+
+    for (size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+        if ((c == '\'' || c == '"')) {
+            if (!inQuotes) {
+                inQuotes = true;
+                quoteChar = c;
+            } else if (quoteChar == c) {
+                inQuotes = false;
+            } else {
+                current += c;
+            }
+        } else if (isspace(c) && !inQuotes) {
+            if (!current.empty()) {
+                args.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) args.push_back(current);
+    return args;
 }
 
-string find_in_path(const string &cmd) {
-    if (access(cmd.c_str(), X_OK) == 0) return cmd; // executable in current dir
+string getCurrentDirectory() {
+    char buffer[PATH_MAX];
+    if (getcwd(buffer, sizeof(buffer)) != NULL)
+        return string(buffer);
+    else
+        return "";
+}
 
-    char *path_env = getenv("PATH");
-    if (!path_env) return "";
-
-    string path(path_env);
-    stringstream ss(path);
+string findInPath(const string& program) {
+    const char* path = getenv("PATH");
+    if (!path) return "";
+    
+    string pathStr(path);
+    stringstream ss(pathStr);
     string dir;
+    
     while (getline(ss, dir, ':')) {
-        string full_path = dir + "/" + cmd;
-        if (access(full_path.c_str(), X_OK) == 0)
-            return full_path;
+        string fullPath = dir + "/" + program;
+        if (access(fullPath.c_str(), X_OK) == 0) {
+            return fullPath;
+        }
     }
     return "";
 }
@@ -37,89 +73,104 @@ int main() {
     while (true) {
         cout << "$ ";
         string input;
-        getline(cin, input);
+        if (!getline(cin, input)) break;
+        if (input.empty()) continue;
 
-        // split input into parts
-        vector<string> parts;
-        string word;
-        stringstream ss(input);
-        while (ss >> word) parts.push_back(word);
-        if (parts.empty()) continue;
+        vector<string> args = parseInput(input);
+        if (args.empty()) continue;
 
-        if (input == "exit 0") return 0;
+        string cmd = args[0];
+
+        // exit
+        if (cmd == "exit" && args.size() == 2 && args[1] == "0") return 0;
 
         // echo
-        else if (parts[0] == "echo") {
-            for (size_t i = 1; i < parts.size(); ++i)
-                cout << parts[i] << (i + 1 < parts.size() ? " " : "\n");
+        else if (cmd == "echo") {
+            for (size_t i = 1; i < args.size(); ++i) {
+                cout << args[i];
+                if (i != args.size() - 1) cout << " ";
+            }
+            cout << "\n";
         }
 
         // pwd
-        else if (parts[0] == "pwd") {
-            char cwd[1024];
-            if (getcwd(cwd, sizeof(cwd)) != NULL)
-                cout << cwd << "\n";
-            else
-                perror("pwd");
+        else if (cmd == "pwd") {
+            cout << getCurrentDirectory() << "\n";
         }
 
         // cd
-        else if (parts[0] == "cd") {
-            const char* home = getenv("HOME");
-            if (parts.size() < 2) {
-                // cd with no args → go home
-                if (chdir(home) != 0)
-                    cerr << "cd: " << home << ": " << strerror(errno) << "\n";
-            } else {
-                string path = parts[1];
-                // Handle ~ (home shortcut)
-                if (path == "~") path = home;
-                if (chdir(path.c_str()) != 0)
-                    cerr << "cd: " << path << ": " << strerror(errno) << "\n";
+        else if (cmd == "cd") {
+            if (args.size() < 2) continue;
+            string path = args[1];
+            if (path == "~") {
+                const char* home = getenv("HOME");
+                if (home) path = home;
+                else path = "/home/user";
+            }
+            if (chdir(path.c_str()) != 0) {
+                cerr << "cd: " << path << ": No such file or directory\n";
             }
         }
 
         // type
-        else if (parts[0] == "type") {
-            if (parts.size() < 2) {
-                cout << "type: missing argument\n";
-                continue;
-            }
-            string cmd = parts[1];
-            if (is_builtin(cmd))
-                cout << cmd << " is a shell builtin\n";
-            else {
-                string path = find_in_path(cmd);
-                if (!path.empty())
-                    cout << cmd << " is " << path << "\n";
-                else
-                    cout << cmd << ": not found\n";
+        else if (cmd == "type") {
+            if (args.size() < 2) continue;
+            string name = args[1];
+            if (name == "echo" || name == "exit" || name == "type" || name == "pwd" || name == "cd") {
+                cout << name << " is a shell builtin\n";
+            } else {
+                string path = findInPath(name);
+                if (!path.empty()) {
+                    cout << name << " is " << path << "\n";
+                } else {
+                    cout << name << ": not found\n";
+                }
             }
         }
 
-        // external commands
+        // cat
+        else if (cmd == "cat") {
+            if (args.size() < 2) continue;
+            for (size_t i = 1; i < args.size(); ++i) {
+                ifstream file(args[i].c_str());
+                if (!file.is_open()) {
+                    cerr << "cat: " << args[i] << ": No such file or directory\n";
+                    continue;
+                }
+                string line;
+                while (getline(file, line)) {
+                    cout << line;
+                }
+                file.close();
+            }
+            cout << "\n";
+        }
+
         else {
-            string path = find_in_path(parts[0]);
-            if (path.empty()) {
-                cout << parts[0] << ": command not found\n";
+            // Try to execute as external program
+            string programPath = findInPath(cmd);
+            
+            if (programPath.empty()) {
+                cout << cmd << ": command not found\n";
                 continue;
             }
-
-            vector<char*> argv;
-            for (auto &p : parts)
-                argv.push_back(&p[0]);
-            argv.push_back(NULL);
-
+            
+            // Execute the program
             pid_t pid = fork();
             if (pid == 0) {
-                execvp(argv[0], argv.data());
-                perror("execvp failed");
-                exit(1);
+                // Child process
+                vector<char*> execArgs;
+                for (size_t i = 0; i < args.size(); ++i) {
+                    execArgs.push_back(const_cast<char*>(args[i].c_str()));
+                }
+                execArgs.push_back(nullptr);
+                
+                execv(programPath.c_str(), execArgs.data());
+                exit(1); // If execv fails
             } else if (pid > 0) {
+                // Parent process
                 int status;
                 waitpid(pid, &status, 0);
-            } else {
-                perror("fork failed");
             }
         }
     }
