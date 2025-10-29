@@ -17,906 +17,739 @@
 
 using namespace std;
 
-// Global history vector
-vector<string> commandHistory;
-// Track the last index that was written to file for append operations
-size_t lastWrittenIndex = 0;
-// History file path from environment variable
-string historyFilePath;
-
-// Helper function to load history from file on startup
-void loadHistoryFromFile() {
-    const char* histfile = getenv("HISTFILE");
-    if (!histfile) return;
+// ===== Configuration =====
+class ShellConfig {
+public:
+    static vector<string> getBuiltinCommands() {
+        return {"echo", "exit", "type", "pwd", "cd", "history"};
+    }
     
-    historyFilePath = histfile;
-    ifstream file(historyFilePath);
-    if (file.is_open()) {
+    static bool isBuiltin(const string& cmd) {
+        auto builtins = getBuiltinCommands();
+        return find(builtins.begin(), builtins.end(), cmd) != builtins.end();
+    }
+};
+
+// ===== History Management =====
+class HistoryManager {
+private:
+    vector<string> commands;
+    size_t lastWrittenIndex = 0;
+    string historyFilePath;
+
+public:
+    void loadFromFile() {
+        const char* histfile = getenv("HISTFILE");
+        if (!histfile) return;
+        
+        historyFilePath = histfile;
+        ifstream file(historyFilePath);
+        if (!file.is_open()) return;
+        
         string line;
         while (getline(file, line)) {
-            // Skip empty lines
             if (!line.empty()) {
-                commandHistory.push_back(line);
+                commands.push_back(line);
             }
         }
-        file.close();
-        // Update lastWrittenIndex to include the loaded commands
-        lastWrittenIndex = commandHistory.size();
+        lastWrittenIndex = commands.size();
     }
-}
 
-// Helper function to save history to file on exit
-void saveHistoryToFile() {
-    if (historyFilePath.empty()) return;
+    void saveToFile() {
+        if (historyFilePath.empty()) return;
+        
+        ofstream file(historyFilePath);
+        if (file.is_open()) {
+            for (const auto& cmd : commands) {
+                file << cmd << "\n";
+            }
+        }
+    }
+
+    void appendToFile(const string& filename) {
+        ofstream file(filename, ios::app);
+        if (file.is_open()) {
+            for (size_t i = lastWrittenIndex; i < commands.size(); ++i) {
+                file << commands[i] << "\n";
+            }
+            lastWrittenIndex = commands.size();
+        }
+    }
+
+    void writeToFile(const string& filename) {
+        ofstream file(filename);
+        if (file.is_open()) {
+            for (const auto& cmd : commands) {
+                file << cmd << "\n";
+            }
+            lastWrittenIndex = commands.size();
+        }
+    }
+
+    void readFromFile(const string& filename) {
+        ifstream file(filename);
+        if (!file.is_open()) return;
+        
+        string line;
+        while (getline(file, line)) {
+            if (!line.empty()) {
+                commands.push_back(line);
+            }
+        }
+        lastWrittenIndex = commands.size();
+    }
+
+    void add(const string& command) { 
+        if (!command.empty()) commands.push_back(command); 
+    }
     
-    ofstream file(historyFilePath);
-    if (file.is_open()) {
-        for (const auto& command : commandHistory) {
-            file << command << "\n";
-        }
-        file.close();
+    const vector<string>& getAll() const { return commands; }
+    size_t size() const { return commands.size(); }
+    string get(size_t index) const { return commands[index]; }
+};
+
+// ===== Utility Functions =====
+class ShellUtils {
+public:
+    static string getCurrentDirectory() {
+        char buffer[PATH_MAX];
+        return getcwd(buffer, sizeof(buffer)) ? string(buffer) : "";
     }
-}
 
-// Helper function to parse quoted and unquoted words
-vector<string> parseInput(const string &input) {
-    vector<string> args;
-    string current;
-    bool inQuotes = false;
-    char quoteChar = '\0';
-
-    for (size_t i = 0; i < input.size(); ++i) {
-        char c = input[i];
+    static string findInPath(const string& program) {
+        const char* path = getenv("PATH");
+        if (!path) return "";
         
-        // Handle backslash escaping
-        if (c == '\\' && i + 1 < input.size()) {
-            if (!inQuotes) {
-                // Outside quotes: backslash escapes the next character
-                current += input[i + 1];
-                ++i;
-                continue;
-            } else if (inQuotes && quoteChar == '"') {
-                // Inside double quotes: backslash escapes ", \, and $
-                char next = input[i + 1];
-                if (next == '"' || next == '\\' || next == '$') {
-                    current += next;
-                    ++i;
-                    continue;
-                }
-                // Otherwise keep both the backslash and the next character
-                current += c;
-                current += input[i + 1];
-                ++i;
-                continue;
-            } else {
-                // Inside single quotes: backslash is literal
-                current += c;
-                continue;
+        stringstream ss(path);
+        string dir;
+        while (getline(ss, dir, ':')) {
+            string fullPath = dir + "/" + program;
+            if (access(fullPath.c_str(), X_OK) == 0) {
+                return fullPath;
             }
         }
-        
-        if ((c == '\'' || c == '"')) {
-            if (!inQuotes) {
-                inQuotes = true;
-                quoteChar = c;
-            } else if (quoteChar == c) {
-                inQuotes = false;
-            } else {
-                current += c;
-            }
-        } else if (isspace(c) && !inQuotes) {
-            if (!current.empty()) {
-                args.push_back(current);
-                current.clear();
-            }
-        } else {
-            current += c;
-        }
-    }
-    if (!current.empty()) args.push_back(current);
-    return args;
-}
-
-string getCurrentDirectory() {
-    char buffer[PATH_MAX];
-    if (getcwd(buffer, sizeof(buffer)) != NULL)
-        return string(buffer);
-    else
         return "";
-}
-
-string findInPath(const string& program) {
-    const char* path = getenv("PATH");
-    if (!path) return "";
-    
-    string pathStr(path);
-    stringstream ss(pathStr);
-    string dir;
-    
-    while (getline(ss, dir, ':')) {
-        string fullPath = dir + "/" + program;
-        if (access(fullPath.c_str(), X_OK) == 0) {
-            return fullPath;
-        }
     }
-    return "";
-}
 
-vector<string> getBuiltinCommands() {
-    // Only return actual shell builtins, not extended commands we implemented
-    return {"echo", "exit", "type", "pwd", "cd", "history"};
-}
-
-vector<string> getExecutablesInPath(const string& prefix) {
-    vector<string> executables;
-    const char* path = getenv("PATH");
-    if (!path) return executables;
-    
-    string pathStr(path);
-    stringstream ss(pathStr);
-    string dir;
-    
-    while (getline(ss, dir, ':')) {
-        // Skip empty directories
-        if (dir.empty()) continue;
+    static vector<string> getExecutablesInPath(const string& prefix) {
+        vector<string> executables;
+        const char* path = getenv("PATH");
+        if (!path) return executables;
         
-        // Open directory - skip if it doesn't exist
-        DIR* dirp = opendir(dir.c_str());
-        if (!dirp) continue;
-        
-        struct dirent* entry;
-        while ((entry = readdir(dirp)) != nullptr) {
-            string filename = entry->d_name;
-            // Skip . and ..
-            if (filename == "." || filename == "..") continue;
+        stringstream ss(path);
+        string dir;
+        while (getline(ss, dir, ':')) {
+            if (dir.empty()) continue;
             
-            // Check if filename starts with prefix
-            if (filename.find(prefix) == 0) {
+            DIR* dirp = opendir(dir.c_str());
+            if (!dirp) continue;
+            
+            struct dirent* entry;
+            while ((entry = readdir(dirp)) != nullptr) {
+                string filename = entry->d_name;
+                if (filename == "." || filename == "..") continue;
+                if (filename.find(prefix) != 0) continue;
+                
                 string fullPath = dir + "/" + filename;
-                // Check if it's executable
                 if (access(fullPath.c_str(), X_OK) == 0) {
-                    // Avoid duplicates
                     if (find(executables.begin(), executables.end(), filename) == executables.end()) {
                         executables.push_back(filename);
                     }
                 }
             }
+            closedir(dirp);
         }
-        closedir(dirp);
+        return executables;
     }
-    
-    return executables;
-}
 
-vector<string> findCompletions(const string& prefix) {
-    vector<string> completions;
-    
-    // If prefix is empty, don't complete
-    if (prefix.empty()) return completions;
-    
-    vector<string> builtins = getBuiltinCommands();
-    
-    // Add matching builtins first
-    for (const auto& builtin : builtins) {
-        if (builtin.find(prefix) == 0) {  // starts with prefix
-            completions.push_back(builtin);
-        }
-    }
-    
-    // Add matching executables from PATH
-    vector<string> executables = getExecutablesInPath(prefix);
-    for (const auto& exe : executables) {
-        // Avoid duplicates with builtins
-        if (find(completions.begin(), completions.end(), exe) == completions.end()) {
-            completions.push_back(exe);
-        }
-    }
-    
-    return completions;
-}
+    static vector<string> parseInput(const string &input) {
+        vector<string> args;
+        string current;
+        bool inQuotes = false;
+        char quoteChar = '\0';
 
-string findCommonPrefix(const vector<string>& strings) {
-    if (strings.empty()) return "";
-    if (strings.size() == 1) return strings[0];
-    
-    string prefix = strings[0];
-    for (size_t i = 1; i < strings.size(); ++i) {
-        size_t j = 0;
-        while (j < prefix.length() && j < strings[i].length() && prefix[j] == strings[i][j]) {
-            ++j;
-        }
-        prefix = prefix.substr(0, j);
-        if (prefix.empty()) break;
-    }
-    
-    return prefix;
-}
-
-string readLineWithCompletion() {
-    string line;
-    char ch;
-    int tabPressCount = 0; // Track consecutive TAB presses
-    int historyIndex = commandHistory.size(); // Start beyond history (current line)
-    string currentLine; // Store the current line being typed before history navigation
-
-    while (read(STDIN_FILENO, &ch, 1) == 1) {
-        // Handle escape sequences (arrow keys)
-        if (ch == '\x1b') { // ESC character
-            char seq[2];
-            if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
-            if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
+        for (size_t i = 0; i < input.size(); ++i) {
+            char c = input[i];
             
-            if (seq[0] == '[') {
-                if (seq[1] == 'A') { // Up arrow
-                    if (!commandHistory.empty()) {
-                        if (historyIndex == (int)commandHistory.size()) {
-                            // Save current line when starting history navigation
-                            currentLine = line;
-                        }
-                        if (historyIndex > 0) {
-                            historyIndex--;
-                            line = commandHistory[historyIndex];
-                            
-                            // Clear current line and display history entry
-                            write(STDOUT_FILENO, "\r$ ", 3);
-                            // Clear to end of line
-                            write(STDOUT_FILENO, "\033[K", 3);
-                            // Display the history entry
-                            write(STDOUT_FILENO, line.c_str(), line.length());
-                        }
-                    }
+            // Handle backslash escaping
+            if (c == '\\' && i + 1 < input.size()) {
+                if (!inQuotes) {
+                    current += input[++i];
                     continue;
-                } else if (seq[1] == 'B') { // Down arrow
-                    if (!commandHistory.empty()) {
-                        if (historyIndex < (int)commandHistory.size() - 1) {
-                            historyIndex++;
-                            line = commandHistory[historyIndex];
-                            
-                            // Clear current line and display history entry
-                            write(STDOUT_FILENO, "\r$ ", 3);
-                            // Clear to end of line
-                            write(STDOUT_FILENO, "\033[K", 3);
-                            // Display the history entry
-                            write(STDOUT_FILENO, line.c_str(), line.length());
-                        } else if (historyIndex == (int)commandHistory.size() - 1) {
-                            // Go back to the original current line
-                            historyIndex = commandHistory.size();
-                            line = currentLine;
-                            
-                            // Clear current line and display original line
-                            write(STDOUT_FILENO, "\r$ ", 3);
-                            // Clear to end of line
-                            write(STDOUT_FILENO, "\033[K", 3);
-                            // Display the original line
-                            write(STDOUT_FILENO, line.c_str(), line.length());
-                        }
+                } else if (inQuotes && quoteChar == '"') {
+                    char next = input[i + 1];
+                    if (next == '"' || next == '\\' || next == '$') {
+                        current += next;
+                        ++i;
+                        continue;
                     }
-                    continue;
                 }
+            }
+            
+            if ((c == '\'' || c == '"')) {
+                if (!inQuotes) {
+                    inQuotes = true;
+                    quoteChar = c;
+                } else if (quoteChar == c) {
+                    inQuotes = false;
+                } else {
+                    current += c;
+                }
+            } else if (isspace(c) && !inQuotes) {
+                if (!current.empty()) {
+                    args.push_back(current);
+                    current.clear();
+                }
+            } else {
+                current += c;
             }
         }
         
-        if (ch == '\n') {
-            write(STDOUT_FILENO, "\n", 1);
-            tabPressCount = 0; // Reset on Enter
-            break;
-        } else if (ch == 127 || ch == 8) {  // Backspace
-            if (!line.empty()) {
-                line.pop_back();
-                write(STDOUT_FILENO, "\b \b", 3);
+        if (!current.empty()) args.push_back(current);
+        return args;
+    }
+};
+
+// ===== Tab Completion =====
+class TabCompleter {
+public:
+    static vector<string> findCompletions(const string& prefix) {
+        vector<string> completions;
+        if (prefix.empty()) return completions;
+        
+        // Add matching builtins
+        for (const auto& builtin : ShellConfig::getBuiltinCommands()) {
+            if (builtin.find(prefix) == 0) {
+                completions.push_back(builtin);
             }
-            tabPressCount = 0; // Reset on any other key
-            historyIndex = commandHistory.size(); // Exit history navigation
-            currentLine.clear();
-        } else if (ch == '\t') {  // Tab completion
-            size_t lastSpace = line.find_last_of(' ');
-            string currentWord = (lastSpace == string::npos) ? line : line.substr(lastSpace + 1);
-
-            // Only complete the first word (the command)
-            if (lastSpace == string::npos && !currentWord.empty()) {
-                vector<string> completions = findCompletions(currentWord);
-
-                if (completions.empty()) {
-                    write(STDOUT_FILENO, "\a", 1); // No matches, ring bell
-                    tabPressCount = 0;
-                } else if (completions.size() == 1) {
-                    // Unique match - complete immediately
-                    string completion = completions[0];
-                    string toAdd = completion.substr(currentWord.size()) + " ";
-                    line += toAdd;
-                    write(STDOUT_FILENO, toAdd.c_str(), toAdd.size());
-                    tabPressCount = 0;
-                } else {
-                    // Multiple matches: complete to longest common prefix
-                    string lcp = findCommonPrefix(completions);
-                    if (lcp.size() > currentWord.size()) {
-                        string toAdd = lcp.substr(currentWord.size());
-                        line += toAdd;
-                        write(STDOUT_FILENO, toAdd.c_str(), toAdd.size());
-                    } else {
-                        // If no further completion possible, ring bell
-                        write(STDOUT_FILENO, "\a", 1);
-                    }
-
-                    tabPressCount++;
-                    if (tabPressCount == 2) {
-                        // Second TAB: list matches alphabetically
-                        sort(completions.begin(), completions.end());
-                        string output = "\n";
-                        for (const auto& comp : completions) {
-                            output += comp + "  ";
-                        }
-                        output += "\n$ " + line;
-                        write(STDOUT_FILENO, output.c_str(), output.size());
-                        tabPressCount = 0;
-                    }
-                }
-            } else {
-                // If typing arguments, ignore TAB
-                tabPressCount = 0;
+        }
+        
+        // Add matching executables
+        for (const auto& exe : ShellUtils::getExecutablesInPath(prefix)) {
+            if (find(completions.begin(), completions.end(), exe) == completions.end()) {
+                completions.push_back(exe);
             }
-            historyIndex = commandHistory.size(); // Exit history navigation
-            currentLine.clear();
-        } else if (ch >= 32 && ch < 127) {  // Printable characters
-            line += ch;
-            write(STDOUT_FILENO, &ch, 1);
-            tabPressCount = 0; // reset on any other key
-            historyIndex = commandHistory.size(); // Exit history navigation
-            currentLine.clear();
+        }
+        
+        // Sort completions alphabetically
+        sort(completions.begin(), completions.end());
+        
+        return completions;
+    }
+
+    static string findCommonPrefix(const vector<string>& strings) {
+        if (strings.empty()) return "";
+        string prefix = strings[0];
+        
+        for (size_t i = 1; i < strings.size() && !prefix.empty(); ++i) {
+            size_t j = 0;
+            while (j < prefix.length() && j < strings[i].length() && prefix[j] == strings[i][j]) {
+                ++j;
+            }
+            prefix = prefix.substr(0, j);
+        }
+        return prefix;
+    }
+};
+
+// ===== Input Handler =====
+class InputHandler {
+private:
+    HistoryManager& history;
+    string currentLine;
+    int historyIndex;
+    int tabPressCount;
+
+    void handleArrowKey(char arrowType) {
+        if (history.getAll().empty()) return;
+        
+        if (historyIndex == (int)history.size()) {
+            currentLine = line;
+        }
+        
+        if (arrowType == 'A' && historyIndex > 0) historyIndex--;
+        if (arrowType == 'B' && historyIndex < (int)history.size() - 1) historyIndex++;
+        
+        if (historyIndex >= 0 && historyIndex < (int)history.size()) {
+            line = history.get(historyIndex);
+        } else if (arrowType == 'B' && historyIndex == (int)history.size()) {
+            line = currentLine;
+        }
+        
+        updateDisplay();
+    }
+
+    void handleTabCompletion() {
+        size_t lastSpace = line.find_last_of(' ');
+        string currentWord = (lastSpace == string::npos) ? line : line.substr(lastSpace + 1);
+
+        if (lastSpace != string::npos || currentWord.empty()) return;
+
+        auto completions = TabCompleter::findCompletions(currentWord);
+        
+        if (completions.empty()) {
+            write(STDOUT_FILENO, "\a", 1);
+        } else if (completions.size() == 1) {
+            completeWord(completions[0], currentWord);
         } else {
-            tabPressCount = 0; // reset on any other key
+            handleMultipleCompletions(completions, currentWord);
         }
     }
 
-    return line;
-}
-
-void executeCommand(const vector<string>& cmdArgs) {
-    if (cmdArgs.empty()) return;
-
-    string cmd = cmdArgs[0];
-    string path = findInPath(cmd);
-    if (path.empty()) {
-        cout << cmd << ": command not found\n";
-        return;
+    void completeWord(const string& completion, const string& currentWord) {
+        string toAdd = completion.substr(currentWord.size()) + " ";
+        line += toAdd;
+        write(STDOUT_FILENO, toAdd.c_str(), toAdd.size());
+        tabPressCount = 0;
     }
 
-    pid_t pid = fork();
-    if (pid == 0) {
-        // Child process
-        vector<char*> execArgs;
-        for (const auto& arg : cmdArgs) {
-            execArgs.push_back(const_cast<char*>(arg.c_str()));
+    void handleMultipleCompletions(const vector<string>& completions, const string& currentWord) {
+        string lcp = TabCompleter::findCommonPrefix(completions);
+        if (lcp.size() > currentWord.size()) {
+            string toAdd = lcp.substr(currentWord.size());
+            line += toAdd;
+            write(STDOUT_FILENO, toAdd.c_str(), toAdd.size());
+        } else {
+            write(STDOUT_FILENO, "\a", 1);
         }
-        execArgs.push_back(nullptr);
 
-        execv(path.c_str(), execArgs.data());
-        perror("execv failed");
-        exit(1);
-    } else if (pid > 0) {
-        // Parent process
-        int status;
-        waitpid(pid, &status, 0);
-    } else {
-        perror("fork failed");
+        if (++tabPressCount == 2) {
+            showCompletionsList(completions);
+            tabPressCount = 0;
+        }
     }
-}
 
-int main() {
-    cout << unitbuf;
-    cerr << unitbuf;
-
-    // Load history from HISTFILE on startup
-    loadHistoryFromFile();
-
-    struct termios old_tio, new_tio;
-    tcgetattr(STDIN_FILENO, &old_tio);
-    new_tio = old_tio;
-    new_tio.c_lflag &= ~(ICANON | ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-
-    while (true) {
-        cout << "$ ";
-        string input = readLineWithCompletion();
-
-        tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
-
-        if (input.empty()) {
-            tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-            continue;
+    void showCompletionsList(const vector<string>& completions) {
+        string output = "\n";
+        for (const auto& comp : completions) {
+            output += comp + "  ";
         }
+        output += "\n$ " + line;
+        write(STDOUT_FILENO, output.c_str(), output.size());
+    }
 
-        // Add command to history (except empty commands)
-        if (!input.empty()) {
-            commandHistory.push_back(input);
-        }
+    void updateDisplay() {
+        write(STDOUT_FILENO, "\r$ \033[K", 6);
+        write(STDOUT_FILENO, line.c_str(), line.length());
+    }
 
-        vector<string> args = parseInput(input);
-        if (args.empty()) {
-            tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-            continue;
-        }
+    void resetHistoryState() {
+        historyIndex = history.size();
+        currentLine.clear();
+        tabPressCount = 0;
+    }
 
-        // Helper function to check if a command is builtin
-        auto isBuiltin = [](const vector<string>& cmdArgs) -> bool {
-            if (cmdArgs.empty()) return false;
-            vector<string> builtins = getBuiltinCommands();
-            return find(builtins.begin(), builtins.end(), cmdArgs[0]) != builtins.end();
-        };
+public:
+    string line;
 
-        // Helper function to execute builtin command
-        auto executeBuiltin = [](const vector<string>& cmdArgs, int in_fd = -1, int out_fd = -1) {
-            if (cmdArgs.empty()) return;
-            
-            string cmd = cmdArgs[0];
-            int saved_stdin = -1, saved_stdout = -1;
-            
-            // Save original file descriptors
-            if (in_fd != -1) {
-                saved_stdin = dup(STDIN_FILENO);
-                dup2(in_fd, STDIN_FILENO);
-                close(in_fd);
+    InputHandler(HistoryManager& hist) : history(hist), historyIndex(hist.size()), tabPressCount(0) {}
+
+    string readLine() {
+        line.clear();
+        char ch;
+        
+        while (read(STDIN_FILENO, &ch, 1) == 1) {
+            if (ch == '\x1b') {
+                handleEscapeSequence();
+            } else if (ch == '\n') {
+                write(STDOUT_FILENO, "\n", 1);
+                break;
+            } else if (ch == 127 || ch == 8) {
+                handleBackspace();
+            } else if (ch == '\t') {
+                handleTabCompletion();
+            } else if (ch >= 32 && ch < 127) {
+                handlePrintableChar(ch);
             }
-            if (out_fd != -1) {
-                saved_stdout = dup(STDOUT_FILENO);
-                dup2(out_fd, STDOUT_FILENO);
-                close(out_fd);
-            }
+        }
+        return line;
+    }
 
-            // Execute builtin
-            if (cmd == "echo") {
-                for (size_t i = 1; i < cmdArgs.size(); ++i) {
-                    cout << cmdArgs[i]; 
-                    if (i != cmdArgs.size()-1) cout << " ";
-                }
-                cout << "\n";
-            } else if (cmd == "pwd") {
-                cout << getCurrentDirectory() << "\n";
-            } else if (cmd == "cd") {
-                if (cmdArgs.size() < 2) {
-                    const char* home = getenv("HOME");
-                    if (home) {
-                        if (chdir(home) != 0) {
-                            cerr << "cd: " << home << ": No such file or directory\n";
-                        }
-                    }
+private:
+    void handleEscapeSequence() {
+        char seq[2];
+        if (read(STDIN_FILENO, &seq[0], 1) != 1) return;
+        if (read(STDIN_FILENO, &seq[1], 1) != 1) return;
+        
+        if (seq[0] == '[' && (seq[1] == 'A' || seq[1] == 'B')) {
+            handleArrowKey(seq[1]);
+        }
+    }
+
+    void handleBackspace() {
+        if (!line.empty()) {
+            line.pop_back();
+            write(STDOUT_FILENO, "\b \b", 3);
+        }
+        resetHistoryState();
+    }
+
+    void handlePrintableChar(char ch) {
+        line += ch;
+        write(STDOUT_FILENO, &ch, 1);
+        resetHistoryState();
+    }
+};
+
+// ===== Command Execution =====
+class CommandExecutor {
+private:
+    HistoryManager& history;
+
+    void executeExternalCommand(const vector<string>& cmdArgs) {
+        string path = ShellUtils::findInPath(cmdArgs[0]);
+        if (path.empty()) {
+            cout << cmdArgs[0] << ": command not found\n";
+            return;
+        }
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            vector<char*> execArgs;
+            for (const auto& arg : cmdArgs) {
+                execArgs.push_back(const_cast<char*>(arg.c_str()));
+            }
+            execArgs.push_back(nullptr);
+            execv(path.c_str(), execArgs.data());
+            perror("execv failed");
+            exit(1);
+        } else if (pid > 0) {
+            waitpid(pid, nullptr, 0);
+        }
+    }
+
+    bool setupRedirection(int& saved_fd, int fd, const string& filename, int flags) {
+        saved_fd = dup(fd);
+        int new_fd = open(filename.c_str(), flags, 0644);
+        if (new_fd < 0) {
+            cerr << "Error opening file: " << filename << "\n";
+            return false;
+        }
+        dup2(new_fd, fd);
+        close(new_fd);
+        return true;
+    }
+
+    void restoreRedirection(int saved_fd, int fd) {
+        if (saved_fd >= 0) {
+            dup2(saved_fd, fd);
+            close(saved_fd);
+        }
+    }
+
+public:
+    CommandExecutor(HistoryManager& hist) : history(hist) {}
+
+    void executeBuiltin(const vector<string>& cmdArgs, int in_fd = -1, int out_fd = -1) {
+        if (cmdArgs.empty()) return;
+        
+        string cmd = cmdArgs[0];
+        int saved_stdin = -1, saved_stdout = -1;
+
+        // Setup redirection
+        if (in_fd != -1) { saved_stdin = dup(STDIN_FILENO); dup2(in_fd, STDIN_FILENO); close(in_fd); }
+        if (out_fd != -1) { saved_stdout = dup(STDOUT_FILENO); dup2(out_fd, STDOUT_FILENO); close(out_fd); }
+
+        // Execute command
+        if (cmd == "echo") {
+            for (size_t i = 1; i < cmdArgs.size(); ++i) {
+                cout << cmdArgs[i] << (i != cmdArgs.size()-1 ? " " : "");
+            }
+            cout << "\n";
+        } else if (cmd == "pwd") {
+            cout << ShellUtils::getCurrentDirectory() << "\n";
+        } else if (cmd == "cd") {
+            string path = cmdArgs.size() < 2 ? getenv("HOME") ?: "" : cmdArgs[1];
+            if (path == "~") path = getenv("HOME") ?: "~";
+            if (chdir(path.c_str()) != 0) {
+                cerr << "cd: " << path << ": No such file or directory\n";
+            }
+        } else if (cmd == "type") {
+            if (cmdArgs.size() >= 2) {
+                string name = cmdArgs[1];
+                if (ShellConfig::isBuiltin(name)) {
+                    cout << name << " is a shell builtin\n";
                 } else {
-                    string path = cmdArgs[1];
-                    if (path == "~") {
-                        const char* home = getenv("HOME");
-                        if (home) path = home;
-                    }
-                    if (chdir(path.c_str()) != 0) {
-                        cerr << "cd: " << path << ": No such file or directory\n";
-                    }
-                }
-            } else if (cmd == "type") {
-                if (cmdArgs.size() < 2) { /* ignore */ }
-                else {
-                    string name = cmdArgs[1];
-                    vector<string> builtins = getBuiltinCommands();
-                    if (find(builtins.begin(), builtins.end(), name) != builtins.end()) {
-                        cout << name << " is a shell builtin\n";
-                    } else {
-                        string path = findInPath(name);
-                        if (!path.empty()) {
-                            cout << name << " is " << path << "\n";
-                        } else {
-                            cout << name << ": not found\n";
-                        }
-                    }
-                }
-            } else if (cmd == "history") {
-                // Handle history -r command to read from file
-                if (cmdArgs.size() >= 3 && cmdArgs[1] == "-r") {
-                    string filename = cmdArgs[2];
-                    ifstream file(filename);
-                    if (file.is_open()) {
-                        string line;
-                        while (getline(file, line)) {
-                            // Skip empty lines
-                            if (!line.empty()) {
-                                commandHistory.push_back(line);
-                            }
-                        }
-                        file.close();
-                        // Update lastWrittenIndex to include the newly read commands
-                        lastWrittenIndex = commandHistory.size();
-                    } else {
-                        cerr << "history: cannot open file: " << filename << "\n";
-                    }
-                }
-                // Handle history -w command to write to file
-                else if (cmdArgs.size() >= 3 && cmdArgs[1] == "-w") {
-                    string filename = cmdArgs[2];
-                    ofstream file(filename);
-                    if (file.is_open()) {
-                        for (const auto& command : commandHistory) {
-                            file << command << "\n";
-                        }
-                        file.close();
-                        // Update lastWrittenIndex since all commands are now written
-                        lastWrittenIndex = commandHistory.size();
-                    } else {
-                        cerr << "history: cannot create file: " << filename << "\n";
-                    }
-                }
-                // Handle history -a command to append to file
-                else if (cmdArgs.size() >= 3 && cmdArgs[1] == "-a") {
-                    string filename = cmdArgs[2];
-                    ofstream file(filename, ios::app);
-                    if (file.is_open()) {
-                        // Only append commands that haven't been written yet
-                        for (size_t i = lastWrittenIndex; i < commandHistory.size(); ++i) {
-                            file << commandHistory[i] << "\n";
-                        }
-                        file.close();
-                        // Update lastWrittenIndex to include the newly appended commands
-                        lastWrittenIndex = commandHistory.size();
-                    } else {
-                        cerr << "history: cannot open file for appending: " << filename << "\n";
-                    }
-                }
-                else {
-                    // Display command history with optional limit
-                    size_t start_index = 0;
-                    size_t count = commandHistory.size();
-                    
-                    if (cmdArgs.size() >= 2) {
-                        // Try to parse the number argument
-                        try {
-                            int n = stoi(cmdArgs[1]);
-                            if (n > 0) {
-                                if ((size_t)n < count) {
-                                    start_index = count - n;
-                                }
-                                // If n is larger than history size, show all (start_index remains 0)
-                            }
-                        } catch (const exception& e) {
-                            // If argument is not a valid number, ignore it and show all history
-                        }
-                    }
-                    
-                    for (size_t i = start_index; i < count; ++i) {
-                        cout << "    " << (i + 1) << "  " << commandHistory[i] << "\n";
-                    }
+                    string path = ShellUtils::findInPath(name);
+                    cout << name << (path.empty() ? ": not found" : " is " + path) << "\n";
                 }
             }
+        } else if (cmd == "history") {
+            handleHistoryCommand(cmdArgs);
+        }
 
-            // Restore file descriptors
-            if (saved_stdin != -1) {
-                dup2(saved_stdin, STDIN_FILENO);
-                close(saved_stdin);
-            }
-            if (saved_stdout != -1) {
-                dup2(saved_stdout, STDOUT_FILENO);
-                close(saved_stdout);
-            }
-        };
+        // Restore redirection
+        restoreRedirection(saved_stdin, STDIN_FILENO);
+        restoreRedirection(saved_stdout, STDOUT_FILENO);
+    }
 
-        // Handle multi-command pipeline
+    void execute(const vector<string>& cmdArgs, 
+                 const string& stdoutFile = "", bool appendStdout = false,
+                 const string& stderrFile = "", bool appendStderr = false) {
+        if (cmdArgs.empty()) return;
+        
+        int saved_stdout = -1, saved_stderr = -1;
+        bool stdoutSuccess = true, stderrSuccess = true;
+
+        // Setup stdout redirection
+        if (!stdoutFile.empty()) {
+            int flags = O_WRONLY | O_CREAT | (appendStdout ? O_APPEND : O_TRUNC);
+            stdoutSuccess = setupRedirection(saved_stdout, STDOUT_FILENO, stdoutFile, flags);
+        }
+
+        // Setup stderr redirection  
+        if (!stderrFile.empty()) {
+            int flags = O_WRONLY | O_CREAT | (appendStderr ? O_APPEND : O_TRUNC);
+            stderrSuccess = setupRedirection(saved_stderr, STDERR_FILENO, stderrFile, flags);
+        }
+
+        // Execute command only if redirections were successful
+        if ((stdoutFile.empty() || stdoutSuccess) && (stderrFile.empty() || stderrSuccess)) {
+            if (ShellConfig::isBuiltin(cmdArgs[0])) {
+                executeBuiltin(cmdArgs);
+            } else {
+                executeExternalCommand(cmdArgs);
+            }
+        }
+
+        // Restore redirection
+        restoreRedirection(saved_stdout, STDOUT_FILENO);
+        restoreRedirection(saved_stderr, STDERR_FILENO);
+    }
+
+private:
+    void handleHistoryCommand(const vector<string>& cmdArgs) {
+        if (cmdArgs.size() >= 3) {
+            string flag = cmdArgs[1], filename = cmdArgs[2];
+            if (flag == "-r") history.readFromFile(filename);
+            else if (flag == "-w") history.writeToFile(filename);
+            else if (flag == "-a") history.appendToFile(filename);
+            return;
+        }
+        
+        // Display history
+        size_t start_index = 0;
+        size_t count = history.size();
+        
+        if (cmdArgs.size() >= 2) {
+            try {
+                int n = stoi(cmdArgs[1]);
+                if (n > 0 && (size_t)n < count) start_index = count - n;
+            } catch (...) {}
+        }
+        
+        for (size_t i = start_index; i < count; ++i) {
+            cout << "    " << (i + 1) << "  " << history.get(i) << "\n";
+        }
+    }
+};
+
+// ===== Main Shell Class =====
+class Shell {
+private:
+    HistoryManager history;
+    CommandExecutor executor;
+    struct termios old_tio, new_tio;
+
+    void setupTerminal() {
+        tcgetattr(STDIN_FILENO, &old_tio);
+        new_tio = old_tio;
+        new_tio.c_lflag &= ~(ICANON | ECHO);
+        tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+    }
+
+    void restoreTerminal() {
+        tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
+    }
+
+    vector<vector<string>> parsePipeline(const vector<string>& args) {
         vector<vector<string>> commands;
         vector<string> currentCmd;
         
         for (const auto& arg : args) {
             if (arg == "|") {
-                if (!currentCmd.empty()) {
-                    commands.push_back(currentCmd);
-                    currentCmd.clear();
-                }
+                if (!currentCmd.empty()) commands.push_back(currentCmd);
+                currentCmd.clear();
             } else {
                 currentCmd.push_back(arg);
             }
         }
-        if (!currentCmd.empty()) {
-            commands.push_back(currentCmd);
-        }
-
-        // If we have multiple commands, handle as pipeline
-        if (commands.size() > 1) {
-            int numCommands = commands.size();
-            vector<pid_t> pids;
-            vector<vector<int>> pipes(numCommands - 1, vector<int>(2));
-
-            // Create all pipes
-            for (int i = 0; i < numCommands - 1; i++) {
-                if (pipe(pipes[i].data()) == -1) {
-                    perror("pipe");
-                    tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-                    continue;
-                }
-            }
-
-            // Execute each command
-            for (int i = 0; i < numCommands; i++) {
-                pid_t pid = fork();
-                if (pid == 0) {
-                    // Child process
-                    
-                    // Set up input redirection (except for first command)
-                    if (i > 0) {
-                        dup2(pipes[i-1][0], STDIN_FILENO);
-                    }
-                    
-                    // Set up output redirection (except for last command)
-                    if (i < numCommands - 1) {
-                        dup2(pipes[i][1], STDOUT_FILENO);
-                    }
-                    
-                    // Close all pipe file descriptors in child
-                    for (int j = 0; j < numCommands - 1; j++) {
-                        close(pipes[j][0]);
-                        close(pipes[j][1]);
-                    }
-                    
-                    // Execute the command
-                    if (isBuiltin(commands[i])) {
-                        executeBuiltin(commands[i]);
-                        exit(0);
-                    } else {
-                        executeCommand(commands[i]);
-                        exit(1); // Should not reach here if exec succeeds
-                    }
-                } else if (pid > 0) {
-                    pids.push_back(pid);
-                } else {
-                    perror("fork");
-                }
-            }
-
-            // Close all pipe file descriptors in parent
-            for (int i = 0; i < numCommands - 1; i++) {
-                close(pipes[i][0]);
-                close(pipes[i][1]);
-            }
-
-            // Wait for all child processes
-            for (pid_t pid : pids) {
-                waitpid(pid, nullptr, 0);
-            }
-
-            tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-            continue;
-        }
-
-        // Handle single command with output redirection
-        string redirectStdoutFile, redirectStderrFile;
-        bool hasStdoutRedirect = false, hasStderrRedirect = false;
-        bool appendStdout = false, appendStderr = false;
-        vector<string> cmdArgs = commands.empty() ? args : commands[0];
-
-        // Parse redirections for single command
-        vector<string> filteredArgs;
-        for (size_t i = 0; i < cmdArgs.size(); ++i) {
-            if (cmdArgs[i] == ">" || cmdArgs[i] == "1>") {
-                if (i + 1 < cmdArgs.size()) {
-                    hasStdoutRedirect = true;
-                    appendStdout = false;
-                    redirectStdoutFile = cmdArgs[i + 1];
-                    i++;
-                }
-            } else if (cmdArgs[i] == ">>" || cmdArgs[i] == "1>>") {
-                if (i + 1 < cmdArgs.size()) {
-                    hasStdoutRedirect = true;
-                    appendStdout = true;
-                    redirectStdoutFile = cmdArgs[i + 1];
-                    i++;
-                }
-            } else if (cmdArgs[i] == "2>") {
-                if (i + 1 < cmdArgs.size()) {
-                    hasStderrRedirect = true;
-                    appendStderr = false;
-                    redirectStderrFile = cmdArgs[i + 1];
-                    i++;
-                }
-            } else if (cmdArgs[i] == "2>>") {
-                if (i + 1 < cmdArgs.size()) {
-                    hasStderrRedirect = true;
-                    appendStderr = true;
-                    redirectStderrFile = cmdArgs[i + 1];
-                    i++;
-                }
-            } else {
-                filteredArgs.push_back(cmdArgs[i]);
-            }
-        }
-
-        if (filteredArgs.empty()) {
-            tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-            continue;
-        }
-
-        string cmd = filteredArgs[0];
-
-        // exit - save history before exiting
-        if (cmd == "exit") {
-            int exitCode = 0;
-            if (filteredArgs.size() >= 2) {
-                try {
-                    exitCode = stoi(filteredArgs[1]);
-                } catch (const exception& e) {
-                    // If argument is not a valid number, ignore it
-                }
-            }
-            
-            // Save history to HISTFILE before exiting
-            saveHistoryToFile();
-            
-            // Restore terminal settings
-            tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
-            return exitCode;
-        }
-
-        int saved_stdout = -1, saved_stderr = -1;
-
-        if (hasStdoutRedirect) {
-            saved_stdout = dup(STDOUT_FILENO);
-            int flags = O_WRONLY | O_CREAT | (appendStdout ? O_APPEND : O_TRUNC);
-            int fd = open(redirectStdoutFile.c_str(), flags, 0644);
-            if (fd < 0) { 
-                cerr << "Error opening file: " << redirectStdoutFile << "\n"; 
-                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio); 
-                continue; 
-            }
-            dup2(fd, STDOUT_FILENO);
-            close(fd);
-        }
-
-        if (hasStderrRedirect) {
-            saved_stderr = dup(STDERR_FILENO);
-            int flags = O_WRONLY | O_CREAT | (appendStderr ? O_APPEND : O_TRUNC);
-            int fd = open(redirectStderrFile.c_str(), flags, 0644);
-            if (fd < 0) { 
-                cerr << "Error opening file: " << redirectStderrFile << "\n"; 
-                if (saved_stdout>=0) {
-                    dup2(saved_stdout, STDOUT_FILENO);
-                    close(saved_stdout);
-                } 
-                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio); 
-                continue; 
-            }
-            dup2(fd, STDERR_FILENO);
-            close(fd);
-        }
-
-        // Builtins (non-pipeline)
-        if (cmd == "echo") {
-            for (size_t i = 1; i < filteredArgs.size(); ++i) {
-                cout << filteredArgs[i]; 
-                if (i != filteredArgs.size()-1) cout << " ";
-            }
-            cout << "\n";
-        } else if (cmd == "pwd") {
-            cout << getCurrentDirectory() << "\n";
-        } else if (cmd == "cd") {
-            if (filteredArgs.size() < 2) {
-                const char* home = getenv("HOME");
-                if (home) {
-                    if (chdir(home) != 0) {
-                        cerr << "cd: " << home << ": No such file or directory\n";
-                    }
-                }
-            } else {
-                string path = filteredArgs[1];
-                if (path == "~") {
-                    const char* home = getenv("HOME");
-                    if (home) path = home;
-                }
-                if (chdir(path.c_str()) != 0) {
-                    cerr << "cd: " << path << ": No such file or directory\n";
-                }
-            }
-        } else if (cmd == "type") {
-            if (filteredArgs.size() < 2) { /* ignore */ }
-            else {
-                string name = filteredArgs[1];
-                vector<string> builtins = getBuiltinCommands();
-                if (find(builtins.begin(), builtins.end(), name) != builtins.end()) {
-                    cout << name << " is a shell builtin\n";
-                } else {
-                    string path = findInPath(name);
-                    if (!path.empty()) {
-                        cout << name << " is " << path << "\n";
-                    } else {
-                        cout << name << ": not found\n";
-                    }
-                }
-            }
-        } else if (cmd == "history") {
-            // Handle history -r command to read from file
-            if (filteredArgs.size() >= 3 && filteredArgs[1] == "-r") {
-                string filename = filteredArgs[2];
-                ifstream file(filename);
-                if (file.is_open()) {
-                    string line;
-                    while (getline(file, line)) {
-                        // Skip empty lines
-                        if (!line.empty()) {
-                            commandHistory.push_back(line);
-                        }
-                    }
-                    file.close();
-                    // Update lastWrittenIndex to include the newly read commands
-                    lastWrittenIndex = commandHistory.size();
-                } else {
-                    cerr << "history: cannot open file: " << filename << "\n";
-                }
-            }
-            // Handle history -w command to write to file
-            else if (filteredArgs.size() >= 3 && filteredArgs[1] == "-w") {
-                string filename = filteredArgs[2];
-                ofstream file(filename);
-                if (file.is_open()) {
-                    for (const auto& command : commandHistory) {
-                        file << command << "\n";
-                    }
-                    file.close();
-                    // Update lastWrittenIndex since all commands are now written
-                    lastWrittenIndex = commandHistory.size();
-                } else {
-                    cerr << "history: cannot create file: " << filename << "\n";
-                }
-            }
-            // Handle history -a command to append to file
-            else if (filteredArgs.size() >= 3 && filteredArgs[1] == "-a") {
-                string filename = filteredArgs[2];
-                ofstream file(filename, ios::app);
-                if (file.is_open()) {
-                    // Only append commands that haven't been written yet
-                    for (size_t i = lastWrittenIndex; i < commandHistory.size(); ++i) {
-                        file << commandHistory[i] << "\n";
-                    }
-                    file.close();
-                    // Update lastWrittenIndex to include the newly appended commands
-                    lastWrittenIndex = commandHistory.size();
-                } else {
-                    cerr << "history: cannot open file for appending: " << filename << "\n";
-                }
-            }
-            else {
-                // Display command history with optional limit
-                size_t start_index = 0;
-                size_t count = commandHistory.size();
-                
-                if (filteredArgs.size() >= 2) {
-                    // Try to parse the number argument
-                    try {
-                        int n = stoi(filteredArgs[1]);
-                        if (n > 0) {
-                            if ((size_t)n < count) {
-                                start_index = count - n;
-                            }
-                            // If n is larger than history size, show all (start_index remains 0)
-                        }
-                    } catch (const exception& e) {
-                        // If argument is not a valid number, ignore it and show all history
-                    }
-                }
-                
-                for (size_t i = start_index; i < count; ++i) {
-                    cout << "    " << (i + 1) << "  " << commandHistory[i] << "\n";
-                }
-            }
-        } else {
-            // For non-builtin commands like "cat", execute normally
-            executeCommand(filteredArgs);
-        }
-
-        // Restore stdout/stderr
-        if (saved_stdout >= 0) { 
-            dup2(saved_stdout, STDOUT_FILENO); 
-            close(saved_stdout); 
-        }
-        if (saved_stderr >= 0) { 
-            dup2(saved_stderr, STDERR_FILENO); 
-            close(saved_stderr); 
-        }
-
-        tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+        if (!currentCmd.empty()) commands.push_back(currentCmd);
+        return commands;
     }
 
-    // Save history to HISTFILE before normal program termination
-    saveHistoryToFile();
-    tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
+    struct RedirectionInfo {
+        string stdoutFile;
+        string stderrFile;
+        bool appendStdout = false;
+        bool appendStderr = false;
+        vector<string> filteredArgs;
+    };
+
+    RedirectionInfo parseRedirections(const vector<string>& args) {
+        RedirectionInfo info;
+        info.filteredArgs = args;
+
+        for (size_t i = 0; i < info.filteredArgs.size(); ) {
+            const string& arg = info.filteredArgs[i];
+            
+            if (arg == ">" || arg == "1>") {
+                if (i + 1 < info.filteredArgs.size()) {
+                    info.stdoutFile = info.filteredArgs[i + 1];
+                    info.appendStdout = false;
+                    info.filteredArgs.erase(info.filteredArgs.begin() + i, info.filteredArgs.begin() + i + 2);
+                } else {
+                    i++;
+                }
+            } else if (arg == ">>" || arg == "1>>") {
+                if (i + 1 < info.filteredArgs.size()) {
+                    info.stdoutFile = info.filteredArgs[i + 1];
+                    info.appendStdout = true;
+                    info.filteredArgs.erase(info.filteredArgs.begin() + i, info.filteredArgs.begin() + i + 2);
+                } else {
+                    i++;
+                }
+            } else if (arg == "2>") {
+                if (i + 1 < info.filteredArgs.size()) {
+                    info.stderrFile = info.filteredArgs[i + 1];
+                    info.appendStderr = false;
+                    info.filteredArgs.erase(info.filteredArgs.begin() + i, info.filteredArgs.begin() + i + 2);
+                } else {
+                    i++;
+                }
+            } else if (arg == "2>>") {
+                if (i + 1 < info.filteredArgs.size()) {
+                    info.stderrFile = info.filteredArgs[i + 1];
+                    info.appendStderr = true;
+                    info.filteredArgs.erase(info.filteredArgs.begin() + i, info.filteredArgs.begin() + i + 2);
+                } else {
+                    i++;
+                }
+            } else {
+                i++;
+            }
+        }
+
+        return info;
+    }
+
+    void executePipeline(const vector<vector<string>>& commands) {
+        int numCommands = commands.size();
+        vector<pid_t> pids;
+        vector<vector<int>> pipes(numCommands - 1, vector<int>(2));
+
+        // Create pipes
+        for (int i = 0; i < numCommands - 1; i++) {
+            if (pipe(pipes[i].data()) == -1) {
+                perror("pipe");
+                return;
+            }
+        }
+
+        // Execute commands
+        for (int i = 0; i < numCommands; i++) {
+            pid_t pid = fork();
+            if (pid == 0) {
+                // Child process
+                if (i > 0) dup2(pipes[i-1][0], STDIN_FILENO);
+                if (i < numCommands - 1) dup2(pipes[i][1], STDOUT_FILENO);
+                
+                for (int j = 0; j < numCommands - 1; j++) {
+                    close(pipes[j][0]);
+                    close(pipes[j][1]);
+                }
+                
+                if (ShellConfig::isBuiltin(commands[i][0])) {
+                    executor.executeBuiltin(commands[i]);
+                    exit(0);
+                } else {
+                    vector<char*> execArgs;
+                    for (const auto& arg : commands[i]) {
+                        execArgs.push_back(const_cast<char*>(arg.c_str()));
+                    }
+                    execArgs.push_back(nullptr);
+                    
+                    string path = ShellUtils::findInPath(commands[i][0]);
+                    if (path.empty()) {
+                        cerr << commands[i][0] << ": command not found\n";
+                        exit(1);
+                    }
+                    execv(path.c_str(), execArgs.data());
+                    perror("execv failed");
+                    exit(1);
+                }
+            } else if (pid > 0) {
+                pids.push_back(pid);
+            }
+        }
+
+        // Cleanup
+        for (int i = 0; i < numCommands - 1; i++) {
+            close(pipes[i][0]);
+            close(pipes[i][1]);
+        }
+        for (pid_t pid : pids) waitpid(pid, nullptr, 0);
+    }
+
+public:
+    Shell() : executor(history) {
+        cout << unitbuf;
+        cerr << unitbuf;
+        history.loadFromFile();
+        setupTerminal();
+    }
+
+    ~Shell() {
+        history.saveToFile();
+        restoreTerminal();
+    }
+
+    void run() {
+        while (true) {
+            cout << "$ ";
+            
+            InputHandler input(history);
+            string line = input.readLine();
+            restoreTerminal();
+
+            if (line.empty()) continue;
+
+            history.add(line);
+            vector<string> args = ShellUtils::parseInput(line);
+
+            if (args.empty()) continue;
+
+            // Handle exit command
+            if (args[0] == "exit") {
+                int exitCode = 0;
+                if (args.size() >= 2) {
+                    try { exitCode = stoi(args[1]); } catch (...) {}
+                }
+                return;
+            }
+
+            // Handle pipelines
+            auto commands = parsePipeline(args);
+            if (commands.size() > 1) {
+                executePipeline(commands);
+            } else {
+                // Parse and handle redirections for single command
+                RedirectionInfo redirInfo = parseRedirections(args);
+                if (redirInfo.filteredArgs.empty()) continue;
+                
+                executor.execute(redirInfo.filteredArgs,
+                                redirInfo.stdoutFile, redirInfo.appendStdout,
+                                redirInfo.stderrFile, redirInfo.appendStderr);
+            }
+
+            setupTerminal();
+        }
+    }
+};
+
+// ===== Main Function =====
+int main() {
+    Shell shell;
+    shell.run();
     return 0;
 }
