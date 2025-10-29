@@ -19,6 +19,8 @@ using namespace std;
 
 // Global history vector
 vector<string> commandHistory;
+// Track the last index that was written to file for append operations
+size_t lastWrittenIndex = 0;
 
 // Helper function to parse quoted and unquoted words
 vector<string> parseInput(const string &input) {
@@ -479,6 +481,8 @@ int main() {
                             }
                         }
                         file.close();
+                        // Update lastWrittenIndex to include the newly read commands
+                        lastWrittenIndex = commandHistory.size();
                     } else {
                         cerr << "history: cannot open file: " << filename << "\n";
                     }
@@ -492,6 +496,8 @@ int main() {
                             file << command << "\n";
                         }
                         file.close();
+                        // Update lastWrittenIndex since all commands are now written
+                        lastWrittenIndex = commandHistory.size();
                     } else {
                         cerr << "history: cannot create file: " << filename << "\n";
                     }
@@ -501,10 +507,13 @@ int main() {
                     string filename = cmdArgs[2];
                     ofstream file(filename, ios::app);
                     if (file.is_open()) {
-                        for (const auto& command : commandHistory) {
-                            file << command << "\n";
+                        // Only append commands that haven't been written yet
+                        for (size_t i = lastWrittenIndex; i < commandHistory.size(); ++i) {
+                            file << commandHistory[i] << "\n";
                         }
                         file.close();
+                        // Update lastWrittenIndex to include the newly appended commands
+                        lastWrittenIndex = commandHistory.size();
                     } else {
                         cerr << "history: cannot open file for appending: " << filename << "\n";
                     }
@@ -772,6 +781,8 @@ int main() {
                         }
                     }
                     file.close();
+                    // Update lastWrittenIndex to include the newly read commands
+                    lastWrittenIndex = commandHistory.size();
                 } else {
                     cerr << "history: cannot open file: " << filename << "\n";
                 }
@@ -785,6 +796,8 @@ int main() {
                         file << command << "\n";
                     }
                     file.close();
+                    // Update lastWrittenIndex since all commands are now written
+                    lastWrittenIndex = commandHistory.size();
                 } else {
                     cerr << "history: cannot create file: " << filename << "\n";
                 }
@@ -794,10 +807,13 @@ int main() {
                 string filename = filteredArgs[2];
                 ofstream file(filename, ios::app);
                 if (file.is_open()) {
-                    for (const auto& command : commandHistory) {
-                        file << command << "\n";
+                    // Only append commands that haven't been written yet
+                    for (size_t i = lastWrittenIndex; i < commandHistory.size(); ++i) {
+                        file << commandHistory[i] << "\n";
                     }
                     file.close();
+                    // Update lastWrittenIndex to include the newly appended commands
+                    lastWrittenIndex = commandHistory.size();
                 } else {
                     cerr << "history: cannot open file for appending: " << filename << "\n";
                 }
