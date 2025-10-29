@@ -102,7 +102,7 @@ string findInPath(const string& program) {
 }
 
 vector<string> getBuiltinCommands() {
-    return {"echo", "exit", "type", "pwd", "cd", "cat"};
+    return {"echo", "exit", "type", "pwd", "cd"};
 }
 
 vector<string> getExecutablesInPath(const string& prefix) {
@@ -265,13 +265,41 @@ string readLineWithCompletion() {
     return line;
 }
 
+void executeCommand(const vector<string>& cmdArgs) {
+    if (cmdArgs.empty()) return;
 
+    string cmd = cmdArgs[0];
+    string path = findInPath(cmd);
+    if (path.empty()) {
+        cout << cmd << ": command not found\n";
+        return;
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        // Child process
+        vector<char*> execArgs;
+        for (const auto& arg : cmdArgs) {
+            execArgs.push_back(const_cast<char*>(arg.c_str()));
+        }
+        execArgs.push_back(nullptr);
+
+        execv(path.c_str(), execArgs.data());
+        perror("execv failed");
+        exit(1);
+    } else if (pid > 0) {
+        // Parent process
+        int status;
+        waitpid(pid, &status, 0);
+    } else {
+        perror("fork failed");
+    }
+}
 
 int main() {
     cout << unitbuf;
     cerr << unitbuf;
-    
-    // Set terminal to raw mode for character-by-character input
+
     struct termios old_tio, new_tio;
     tcgetattr(STDIN_FILENO, &old_tio);
     new_tio = old_tio;
@@ -281,10 +309,9 @@ int main() {
     while (true) {
         cout << "$ ";
         string input = readLineWithCompletion();
-        
-        // Restore terminal for command execution
+
         tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
-        
+
         if (input.empty()) {
             tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
             continue;
@@ -296,165 +323,168 @@ int main() {
             continue;
         }
 
-        // Check for output redirection (>, 1>, 2>, >>, 1>>, 2>>)
-        string redirectStdoutFile;
-        string redirectStderrFile;
-        bool hasStdoutRedirect = false;
-        bool hasStderrRedirect = false;
-        bool appendStdout = false;
-        bool appendStderr = false;
+        // Handle dual-command pipeline
+        auto pipePos = find(args.begin(), args.end(), "|");
+        if (pipePos != args.end()) {
+            vector<string> cmd1(args.begin(), pipePos);
+            vector<string> cmd2(pipePos + 1, args.end());
+
+            int fd[2];
+            if (pipe(fd) == -1) {
+                perror("pipe");
+                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+                continue;
+            }
+
+            pid_t pid1 = fork();
+            if (pid1 == 0) {
+                close(fd[0]);
+                dup2(fd[1], STDOUT_FILENO);
+                close(fd[1]);
+                executeCommand(cmd1);
+                exit(0);
+            }
+
+            pid_t pid2 = fork();
+            if (pid2 == 0) {
+                close(fd[1]);
+                dup2(fd[0], STDIN_FILENO);
+                close(fd[0]);
+                executeCommand(cmd2);
+                exit(0);
+            }
+
+            close(fd[0]);
+            close(fd[1]);
+            waitpid(pid1, nullptr, 0);
+            waitpid(pid2, nullptr, 0);
+            tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+            continue;
+        }
+
+        // Handle output redirection
+        string redirectStdoutFile, redirectStderrFile;
+        bool hasStdoutRedirect = false, hasStderrRedirect = false;
+        bool appendStdout = false, appendStderr = false;
         vector<string> cmdArgs;
-        
+
         for (size_t i = 0; i < args.size(); ++i) {
             if (args[i] == ">" || args[i] == "1>") {
                 if (i + 1 < args.size()) {
                     hasStdoutRedirect = true;
                     appendStdout = false;
                     redirectStdoutFile = args[i + 1];
-                    i++; // Skip the filename
+                    i++;
                 }
-            } else if (args[i] == ">>") {
+            } else if (args[i] == ">>" || args[i] == "1>>") {
                 if (i + 1 < args.size()) {
                     hasStdoutRedirect = true;
                     appendStdout = true;
                     redirectStdoutFile = args[i + 1];
-                    i++; // Skip the filename
-                }
-            } else if (args[i] == "1>>") {
-                if (i + 1 < args.size()) {
-                    hasStdoutRedirect = true;
-                    appendStdout = true;
-                    redirectStdoutFile = args[i + 1];
-                    i++; // Skip the filename
+                    i++;
                 }
             } else if (args[i] == "2>") {
                 if (i + 1 < args.size()) {
                     hasStderrRedirect = true;
                     appendStderr = false;
                     redirectStderrFile = args[i + 1];
-                    i++; // Skip the filename
+                    i++;
                 }
             } else if (args[i] == "2>>") {
                 if (i + 1 < args.size()) {
                     hasStderrRedirect = true;
                     appendStderr = true;
                     redirectStderrFile = args[i + 1];
-                    i++; // Skip the filename
+                    i++;
                 }
             } else {
                 cmdArgs.push_back(args[i]);
             }
         }
-        
+
         if (cmdArgs.empty()) {
             tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
             continue;
         }
+
         string cmd = cmdArgs[0];
 
         // exit
         if (cmd == "exit" && cmdArgs.size() == 2 && cmdArgs[1] == "0") return 0;
 
-        // Set up output redirection if needed
-        int saved_stdout = -1;
-        int saved_stderr = -1;
-        
+        int saved_stdout = -1, saved_stderr = -1;
+
         if (hasStdoutRedirect) {
             saved_stdout = dup(STDOUT_FILENO);
             int flags = O_WRONLY | O_CREAT | (appendStdout ? O_APPEND : O_TRUNC);
             int fd = open(redirectStdoutFile.c_str(), flags, 0644);
-            if (fd < 0) {
-                cerr << "Error opening file: " << redirectStdoutFile << "\n";
-                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-                continue;
-            }
+            if (fd < 0) { cerr << "Error opening file: " << redirectStdoutFile << "\n"; tcsetattr(STDIN_FILENO, TCSANOW, &new_tio); continue; }
             dup2(fd, STDOUT_FILENO);
             close(fd);
         }
-        
+
         if (hasStderrRedirect) {
             saved_stderr = dup(STDERR_FILENO);
             int flags = O_WRONLY | O_CREAT | (appendStderr ? O_APPEND : O_TRUNC);
             int fd = open(redirectStderrFile.c_str(), flags, 0644);
-            if (fd < 0) {
-                cerr << "Error opening file: " << redirectStderrFile << "\n";
-                if (hasStdoutRedirect && saved_stdout >= 0) {
-                    dup2(saved_stdout, STDOUT_FILENO);
-                    close(saved_stdout);
-                }
-                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-                continue;
-            }
+            if (fd < 0) { cerr << "Error opening file: " << redirectStderrFile << "\n"; if (saved_stdout>=0){dup2(saved_stdout,STDOUT_FILENO);close(saved_stdout);} tcsetattr(STDIN_FILENO, TCSANOW,&new_tio); continue; }
             dup2(fd, STDERR_FILENO);
             close(fd);
         }
 
-        // echo
+        // Builtins
         if (cmd == "echo") {
             for (size_t i = 1; i < cmdArgs.size(); ++i) {
-                cout << cmdArgs[i];
-                if (i != cmdArgs.size() - 1) cout << " ";
+                cout << cmdArgs[i]; if (i != cmdArgs.size()-1) cout << " ";
             }
             cout << "\n";
-        }
-
-        // pwd
-        else if (cmd == "pwd") {
+        } else if (cmd == "pwd") {
             cout << getCurrentDirectory() << "\n";
-        }
-
-        // cd
+        } // cd
         else if (cmd == "cd") {
             if (cmdArgs.size() < 2) {
-                if (hasStdoutRedirect && saved_stdout >= 0) {
-                    dup2(saved_stdout, STDOUT_FILENO);
-                    close(saved_stdout);
+                // No argument: default to HOME
+                const char* home = getenv("HOME");
+                if (home) {
+                    if (chdir(home) != 0) {
+                        cerr << "cd: " << home << ": No such file or directory\n";
+                    }
                 }
-                if (hasStderrRedirect && saved_stderr >= 0) {
-                    dup2(saved_stderr, STDERR_FILENO);
-                    close(saved_stderr);
-                }
-                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
                 continue;
             }
+
             string path = cmdArgs[1];
             if (path == "~") {
                 const char* home = getenv("HOME");
                 if (home) path = home;
-                else path = "/home/user";
+                // If HOME is not set, just leave path as "~" so chdir will fail
             }
+
             if (chdir(path.c_str()) != 0) {
                 cerr << "cd: " << path << ": No such file or directory\n";
             }
         }
-
-        // type
         else if (cmd == "type") {
-            if (cmdArgs.size() < 2) {
-                if (hasStdoutRedirect && saved_stdout >= 0) {
-                    dup2(saved_stdout, STDOUT_FILENO);
-                    close(saved_stdout);
-                }
-                if (hasStderrRedirect && saved_stderr >= 0) {
-                    dup2(saved_stderr, STDERR_FILENO);
-                    close(saved_stderr);
-                }
-                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-                continue;
-            }
-            string name = cmdArgs[1];
-            if (name == "echo" || name == "exit" || name == "type" || name == "pwd" || name == "cd") {
-                cout << name << " is a shell builtin\n";
-            } else {
-                string path = findInPath(name);
-                if (!path.empty()) {
-                    cout << name << " is " << path << "\n";
-                } else {
-                    cout << name << ": not found\n";
+            if (cmdArgs.size() < 2) { /* ignore */ }
+            else {
+                string name = cmdArgs[1];
+                
+                // First check if it's a builtin command
+                vector<string> builtins = getBuiltinCommands();
+                if (find(builtins.begin(), builtins.end(), name) != builtins.end()) {
+                    cout << name << " is a shell builtin\n";
+                } 
+                // If not builtin, check if it's in PATH
+                else {
+                    string path = findInPath(name);
+                    if (!path.empty()) {
+                        cout << name << " is " << path << "\n";
+                    } else {
+                        cout << name << ": not found\n";
+                    }
                 }
             }
-        }
-
+        } 
         // cat
         else if (cmd == "cat") {
             if (cmdArgs.size() < 2) {
@@ -469,66 +499,28 @@ int main() {
                 tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
                 continue;
             }
+
             for (size_t i = 1; i < cmdArgs.size(); ++i) {
-                ifstream file(cmdArgs[i].c_str());
+                ifstream file(cmdArgs[i].c_str(), ios::binary);
                 if (!file.is_open()) {
                     cerr << "cat: " << cmdArgs[i] << ": No such file or directory\n";
                     continue;
                 }
-                string line;
-                while (getline(file, line)) {
-                    cout << line;
-                    if (!file.eof()) {
-                        cout << "\n";
-                    }
-                }
+                cout << file.rdbuf(); // stream entire file content directly
                 file.close();
             }
         }
-
         else {
-            // Try to execute as external program
-            string programPath = findInPath(cmd);
-            
-            if (programPath.empty()) {
-                cout << cmd << ": command not found\n";
-            } else {
-                // Execute the program
-                pid_t pid = fork();
-                if (pid == 0) {
-                    // Child process
-                    vector<char*> execArgs;
-                    for (size_t i = 0; i < cmdArgs.size(); ++i) {
-                        execArgs.push_back(const_cast<char*>(cmdArgs[i].c_str()));
-                    }
-                    execArgs.push_back(nullptr);
-                    
-                    execv(programPath.c_str(), execArgs.data());
-                    exit(1); // If execv fails
-                } else if (pid > 0) {
-                    // Parent process
-                    int status;
-                    waitpid(pid, &status, 0);
-                }
-            }
+            executeCommand(cmdArgs);
         }
-        
-        // Restore stdout and stderr if they were redirected
-        if (hasStdoutRedirect && saved_stdout >= 0) {
-            dup2(saved_stdout, STDOUT_FILENO);
-            close(saved_stdout);
-        }
-        if (hasStderrRedirect && saved_stderr >= 0) {
-            dup2(saved_stderr, STDERR_FILENO);
-            close(saved_stderr);
-        }
-        
-        // Set terminal back to raw mode for next command
+
+        // Restore stdout/stderr
+        if (saved_stdout >= 0) { dup2(saved_stdout, STDOUT_FILENO); close(saved_stdout); }
+        if (saved_stderr >= 0) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
+
         tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
     }
-    
-    // Restore terminal on exit
-    tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
 
+    tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
     return 0;
 }
