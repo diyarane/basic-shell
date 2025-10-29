@@ -19,6 +19,34 @@ vector<string> parseInput(const string &input) {
 
     for (size_t i = 0; i < input.size(); ++i) {
         char c = input[i];
+        
+        // Handle backslash escaping
+        if (c == '\\' && i + 1 < input.size()) {
+            if (!inQuotes) {
+                // Outside quotes: backslash escapes the next character
+                current += input[i + 1];
+                ++i;
+                continue;
+            } else if (inQuotes && quoteChar == '"') {
+                // Inside double quotes: backslash escapes ", \, and $
+                char next = input[i + 1];
+                if (next == '"' || next == '\\' || next == '$') {
+                    current += next;
+                    ++i;
+                    continue;
+                }
+                // Otherwise keep both the backslash and the next character
+                current += c;
+                current += input[i + 1];
+                ++i;
+                continue;
+            } else {
+                // Inside single quotes: backslash is literal
+                current += c;
+                continue;
+            }
+        }
+        
         if ((c == '\'' || c == '"')) {
             if (!inQuotes) {
                 inQuotes = true;
