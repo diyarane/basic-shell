@@ -5,6 +5,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/types.h>
@@ -12,6 +13,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <termios.h>
+#include <dirent.h>
 
 using namespace std;
 
@@ -103,17 +105,89 @@ vector<string> getBuiltinCommands() {
     return {"echo", "exit", "type", "pwd", "cd", "cat"};
 }
 
+vector<string> getExecutablesInPath(const string& prefix) {
+    vector<string> executables;
+    const char* path = getenv("PATH");
+    if (!path) return executables;
+    
+    string pathStr(path);
+    stringstream ss(pathStr);
+    string dir;
+    
+    while (getline(ss, dir, ':')) {
+        // Skip empty directories
+        if (dir.empty()) continue;
+        
+        // Open directory - skip if it doesn't exist
+        DIR* dirp = opendir(dir.c_str());
+        if (!dirp) continue;
+        
+        struct dirent* entry;
+        while ((entry = readdir(dirp)) != nullptr) {
+            string filename = entry->d_name;
+            // Skip . and ..
+            if (filename == "." || filename == "..") continue;
+            
+            // Check if filename starts with prefix
+            if (filename.find(prefix) == 0) {
+                string fullPath = dir + "/" + filename;
+                // Check if it's executable
+                if (access(fullPath.c_str(), X_OK) == 0) {
+                    // Avoid duplicates
+                    if (find(executables.begin(), executables.end(), filename) == executables.end()) {
+                        executables.push_back(filename);
+                    }
+                }
+            }
+        }
+        closedir(dirp);
+    }
+    
+    return executables;
+}
+
 vector<string> findCompletions(const string& prefix) {
     vector<string> completions;
+    
+    // If prefix is empty, don't complete
+    if (prefix.empty()) return completions;
+    
     vector<string> builtins = getBuiltinCommands();
     
+    // Add matching builtins first
     for (const auto& builtin : builtins) {
         if (builtin.find(prefix) == 0) {  // starts with prefix
             completions.push_back(builtin);
         }
     }
     
+    // Add matching executables from PATH
+    vector<string> executables = getExecutablesInPath(prefix);
+    for (const auto& exe : executables) {
+        // Avoid duplicates with builtins
+        if (find(completions.begin(), completions.end(), exe) == completions.end()) {
+            completions.push_back(exe);
+        }
+    }
+    
     return completions;
+}
+
+string findCommonPrefix(const vector<string>& strings) {
+    if (strings.empty()) return "";
+    if (strings.size() == 1) return strings[0];
+    
+    string prefix = strings[0];
+    for (size_t i = 1; i < strings.size(); ++i) {
+        size_t j = 0;
+        while (j < prefix.length() && j < strings[i].length() && prefix[j] == strings[i][j]) {
+            ++j;
+        }
+        prefix = prefix.substr(0, j);
+        if (prefix.empty()) break;
+    }
+    
+    return prefix;
 }
 
 string readLineWithCompletion() {
@@ -122,12 +196,12 @@ string readLineWithCompletion() {
     
     while (read(STDIN_FILENO, &ch, 1) == 1) {
         if (ch == '\n') {
-            cout << "\n";
+            write(STDOUT_FILENO, "\n", 1);
             break;
         } else if (ch == 127 || ch == 8) {  // Backspace
             if (!line.empty()) {
                 line.pop_back();
-                cout << "\b \b" << flush;
+                write(STDOUT_FILENO, "\b \b", 3);
             }
         } else if (ch == '\t') {  // Tab completion
             // Find the current word being typed (last word after last space)
@@ -141,25 +215,37 @@ string readLineWithCompletion() {
                 if (completions.size() == 1) {
                     // Unique match - complete it and add a space
                     string completion = completions[0];
-                    string toAdd = completion.substr(currentWord.length());
-                    line += toAdd + " ";
-                    cout << toAdd << " " << flush;
+                    line = completion + " ";
+                    // Clear the line and re-print with completion
+                    string output = "\r$ " + line;
+                    write(STDOUT_FILENO, output.c_str(), output.length());
                 } else if (completions.size() > 1) {
-                    // Multiple matches - show them
-                    cout << "\n";
-                    for (const auto& comp : completions) {
-                        cout << comp << "  ";
+                    // Multiple matches - find common prefix
+                    string commonPrefix = findCommonPrefix(completions);
+                    
+                    if (commonPrefix.length() > currentWord.length()) {
+                        // There's a common prefix longer than what's typed - complete to it
+                        line = commonPrefix;
+                        string output = "\r$ " + line;
+                        write(STDOUT_FILENO, output.c_str(), output.length());
+                    } else {
+                        // No additional common prefix - show all options
+                        string output = "\n";
+                        for (const auto& comp : completions) {
+                            output += comp + "  ";
+                        }
+                        output += "\n$ " + line;
+                        write(STDOUT_FILENO, output.c_str(), output.length());
                     }
-                    cout << "\n$ " << line << flush;
                 } else {
                     // No completions - ring the bell
-                    cout << "\a" << flush;
+                    write(STDOUT_FILENO, "\a", 1);
                 }
             }
             // If we're typing arguments, tab does nothing
         } else if (ch >= 32 && ch < 127) {  // Printable characters
             line += ch;
-            cout << ch << flush;
+            write(STDOUT_FILENO, &ch, 1);
         }
     }
     
