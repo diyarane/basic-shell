@@ -4,12 +4,14 @@
 #include <vector>
 #include <fstream>
 #include <cstdlib>
+#include <cstring>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <termios.h>
 
 using namespace std;
 
@@ -97,15 +99,89 @@ string findInPath(const string& program) {
     return "";
 }
 
+vector<string> getBuiltinCommands() {
+    return {"echo", "exit", "type", "pwd", "cd", "cat"};
+}
+
+vector<string> findCompletions(const string& prefix) {
+    vector<string> completions;
+    vector<string> builtins = getBuiltinCommands();
+    
+    for (const auto& builtin : builtins) {
+        if (builtin.find(prefix) == 0) {  // starts with prefix
+            completions.push_back(builtin);
+        }
+    }
+    
+    return completions;
+}
+
+string readLineWithCompletion() {
+    string line;
+    char ch;
+    
+    while (read(STDIN_FILENO, &ch, 1) == 1) {
+        if (ch == '\n') {
+            cout << "\n";
+            break;
+        } else if (ch == 127 || ch == 8) {  // Backspace
+            if (!line.empty()) {
+                line.pop_back();
+                cout << "\b \b" << flush;
+            }
+        } else if (ch == '\t') {  // Tab completion
+            // Find the last word (current command being typed)
+            size_t lastSpace = line.find_last_of(' ');
+            string currentWord = (lastSpace == string::npos) ? line : line.substr(lastSpace + 1);
+            
+            vector<string> completions = findCompletions(currentWord);
+            
+            if (completions.size() == 1) {
+                // Unique match - complete it and add a space
+                string completion = completions[0];
+                string toAdd = completion.substr(currentWord.length());
+                line += toAdd + " ";
+                cout << toAdd << " " << flush;
+            } else if (completions.size() > 1) {
+                // Multiple matches - show them
+                cout << "\n";
+                for (const auto& comp : completions) {
+                    cout << comp << "  ";
+                }
+                cout << "\n$ " << line << flush;
+            }
+            // If no completions, do nothing
+        } else if (ch >= 32 && ch < 127) {  // Printable characters
+            line += ch;
+            cout << ch << flush;
+        }
+    }
+    
+    return line;
+}
+
 int main() {
     cout << unitbuf;
     cerr << unitbuf;
+    
+    // Set terminal to raw mode for character-by-character input
+    struct termios old_tio, new_tio;
+    tcgetattr(STDIN_FILENO, &old_tio);
+    new_tio = old_tio;
+    new_tio.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
 
     while (true) {
         cout << "$ ";
-        string input;
-        if (!getline(cin, input)) break;
-        if (input.empty()) continue;
+        string input = readLineWithCompletion();
+        
+        // Restore terminal for command execution
+        tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
+        
+        if (input.empty()) {
+            tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+            continue;
+        }
 
         vector<string> args = parseInput(input);
         if (args.empty()) continue;
@@ -328,7 +404,13 @@ int main() {
             dup2(saved_stderr, STDERR_FILENO);
             close(saved_stderr);
         }
+        
+        // Set terminal back to raw mode for next command
+        tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
     }
+    
+    // Restore terminal on exit
+    tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
 
     return 0;
 }
