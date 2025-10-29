@@ -193,64 +193,75 @@ string findCommonPrefix(const vector<string>& strings) {
 string readLineWithCompletion() {
     string line;
     char ch;
-    
+    int tabPressCount = 0; // Track consecutive TAB presses
+
     while (read(STDIN_FILENO, &ch, 1) == 1) {
         if (ch == '\n') {
             write(STDOUT_FILENO, "\n", 1);
+            tabPressCount = 0; // Reset on Enter
             break;
         } else if (ch == 127 || ch == 8) {  // Backspace
             if (!line.empty()) {
                 line.pop_back();
                 write(STDOUT_FILENO, "\b \b", 3);
             }
+            tabPressCount = 0; // Reset on any other key
         } else if (ch == '\t') {  // Tab completion
-            // Find the current word being typed (last word after last space)
             size_t lastSpace = line.find_last_of(' ');
             string currentWord = (lastSpace == string::npos) ? line : line.substr(lastSpace + 1);
-            
-            // Only try to complete if we're at the beginning (no space yet) - completing the command
+
+            // Only complete the first word (the command)
             if (lastSpace == string::npos && !currentWord.empty()) {
                 vector<string> completions = findCompletions(currentWord);
-                
-                if (completions.size() == 1) {
-                    // Unique match - complete it and add a space
+
+                if (completions.empty()) {
+                    write(STDOUT_FILENO, "\a", 1); // No matches, ring bell
+                    tabPressCount = 0;
+                } else if (completions.size() == 1) {
+                    // Unique match - complete immediately
                     string completion = completions[0];
-                    line = completion + " ";
-                    // Clear the line and re-print with completion
-                    string output = "\r$ " + line;
-                    write(STDOUT_FILENO, output.c_str(), output.length());
-                } else if (completions.size() > 1) {
-                    // Multiple matches - find common prefix
-                    string commonPrefix = findCommonPrefix(completions);
-                    
-                    if (commonPrefix.length() > currentWord.length()) {
-                        // There's a common prefix longer than what's typed - complete to it
-                        line = commonPrefix;
-                        string output = "\r$ " + line;
-                        write(STDOUT_FILENO, output.c_str(), output.length());
-                    } else {
-                        // No additional common prefix - show all options
-                        string output = "\n";
-                        for (const auto& comp : completions) {
-                            output += comp + "  ";
-                        }
-                        output += "\n$ " + line;
-                        write(STDOUT_FILENO, output.c_str(), output.length());
+                    string toAdd = completion.substr(currentWord.size()) + " ";
+                    line += toAdd;
+                    string output = toAdd;
+                    write(STDOUT_FILENO, output.c_str(), output.size());
+                    tabPressCount = 0;
+                } 
+                else {
+                    // Multiple matches
+                    tabPressCount++;
+                    if (tabPressCount == 1) {
+                        // First TAB: ring bell
+                        write(STDOUT_FILENO, "\a", 1);
+                    } 
+                    else if (tabPressCount == 2) {
+                      // Second TAB: list matches (alphabetically sorted)
+                      sort(completions.begin(), completions.end());
+                      string output = "\n";
+                      for (const auto& comp : completions) {
+                          output += comp + "  ";
+                      }
+                      output += "\n$ " + line;
+                      write(STDOUT_FILENO, output.c_str(), output.size());
+                      tabPressCount = 0; // reset after showing
                     }
-                } else {
-                    // No completions - ring the bell
-                    write(STDOUT_FILENO, "\a", 1);
+
                 }
+            } else {
+                // If typing arguments, ignore TAB
+                tabPressCount = 0;
             }
-            // If we're typing arguments, tab does nothing
         } else if (ch >= 32 && ch < 127) {  // Printable characters
             line += ch;
             write(STDOUT_FILENO, &ch, 1);
+            tabPressCount = 0; // reset on any other key
+        } else {
+            tabPressCount = 0; // reset on any other key
         }
     }
-    
+
     return line;
 }
+
 
 int main() {
     cout << unitbuf;
