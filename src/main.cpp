@@ -206,7 +206,7 @@ string readLineWithCompletion() {
         if (ch == '\x1b') { // ESC character
             char seq[2];
             if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
-            if (read(STDOUT_FILENO, &seq[1], 1) != 1) continue;
+            if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
             
             if (seq[0] == '[') {
                 if (seq[1] == 'A') { // Up arrow
@@ -482,7 +482,34 @@ int main() {
                     } else {
                         cerr << "history: cannot open file: " << filename << "\n";
                     }
-                } else {
+                }
+                // Handle history -w command to write to file
+                else if (cmdArgs.size() >= 3 && cmdArgs[1] == "-w") {
+                    string filename = cmdArgs[2];
+                    ofstream file(filename);
+                    if (file.is_open()) {
+                        for (const auto& command : commandHistory) {
+                            file << command << "\n";
+                        }
+                        file.close();
+                    } else {
+                        cerr << "history: cannot create file: " << filename << "\n";
+                    }
+                }
+                // Handle history -a command to append to file
+                else if (cmdArgs.size() >= 3 && cmdArgs[1] == "-a") {
+                    string filename = cmdArgs[2];
+                    ofstream file(filename, ios::app);
+                    if (file.is_open()) {
+                        for (const auto& command : commandHistory) {
+                            file << command << "\n";
+                        }
+                        file.close();
+                    } else {
+                        cerr << "history: cannot open file for appending: " << filename << "\n";
+                    }
+                }
+                else {
                     // Display command history with optional limit
                     size_t start_index = 0;
                     size_t count = commandHistory.size();
@@ -748,7 +775,34 @@ int main() {
                 } else {
                     cerr << "history: cannot open file: " << filename << "\n";
                 }
-            } else {
+            }
+            // Handle history -w command to write to file
+            else if (filteredArgs.size() >= 3 && filteredArgs[1] == "-w") {
+                string filename = filteredArgs[2];
+                ofstream file(filename);
+                if (file.is_open()) {
+                    for (const auto& command : commandHistory) {
+                        file << command << "\n";
+                    }
+                    file.close();
+                } else {
+                    cerr << "history: cannot create file: " << filename << "\n";
+                }
+            }
+            // Handle history -a command to append to file
+            else if (filteredArgs.size() >= 3 && filteredArgs[1] == "-a") {
+                string filename = filteredArgs[2];
+                ofstream file(filename, ios::app);
+                if (file.is_open()) {
+                    for (const auto& command : commandHistory) {
+                        file << command << "\n";
+                    }
+                    file.close();
+                } else {
+                    cerr << "history: cannot open file for appending: " << filename << "\n";
+                }
+            }
+            else {
                 // Display command history with optional limit
                 size_t start_index = 0;
                 size_t count = commandHistory.size();
