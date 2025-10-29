@@ -402,8 +402,26 @@ int main() {
                     }
                 }
             } else if (cmd == "history") {
-                // Display command history
-                for (size_t i = 0; i < commandHistory.size(); ++i) {
+                // Display command history with optional limit
+                size_t start_index = 0;
+                size_t count = commandHistory.size();
+                
+                if (cmdArgs.size() >= 2) {
+                    // Try to parse the number argument
+                    try {
+                        int n = stoi(cmdArgs[1]);
+                        if (n > 0) {
+                            if ((size_t)n < count) {
+                                start_index = count - n;
+                            }
+                            // If n is larger than history size, show all (start_index remains 0)
+                        }
+                    } catch (const exception& e) {
+                        // If argument is not a valid number, ignore it and show all history
+                    }
+                }
+                
+                for (size_t i = start_index; i < count; ++i) {
                     cout << "    " << (i + 1) << "  " << commandHistory[i] << "\n";
                 }
             }
@@ -632,8 +650,26 @@ int main() {
                 }
             }
         } else if (cmd == "history") {
-            // Display command history
-            for (size_t i = 0; i < commandHistory.size(); ++i) {
+            // Display command history with optional limit
+            size_t start_index = 0;
+            size_t count = commandHistory.size();
+            
+            if (filteredArgs.size() >= 2) {
+                // Try to parse the number argument
+                try {
+                    int n = stoi(filteredArgs[1]);
+                    if (n > 0) {
+                        if ((size_t)n < count) {
+                            start_index = count - n;
+                        }
+                        // If n is larger than history size, show all (start_index remains 0)
+                    }
+                } catch (const exception& e) {
+                    // If argument is not a valid number, ignore it and show all history
+                }
+            }
+            
+            for (size_t i = start_index; i < count; ++i) {
                 cout << "    " << (i + 1) << "  " << commandHistory[i] << "\n";
             }
         } else {
