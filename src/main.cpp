@@ -17,6 +17,9 @@
 
 using namespace std;
 
+// Global history vector
+vector<string> commandHistory;
+
 // Helper function to parse quoted and unquoted words
 vector<string> parseInput(const string &input) {
     vector<string> args;
@@ -102,7 +105,8 @@ string findInPath(const string& program) {
 }
 
 vector<string> getBuiltinCommands() {
-    return {"echo", "exit", "type", "pwd", "cd"};
+    // Only return actual shell builtins, not extended commands we implemented
+    return {"echo", "exit", "type", "pwd", "cd", "history"};
 }
 
 vector<string> getExecutablesInPath(const string& prefix) {
@@ -317,6 +321,11 @@ int main() {
             continue;
         }
 
+        // Add command to history (except empty commands)
+        if (!input.empty()) {
+            commandHistory.push_back(input);
+        }
+
         vector<string> args = parseInput(input);
         if (args.empty()) {
             tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
@@ -392,23 +401,10 @@ int main() {
                         }
                     }
                 }
-            } else if (cmd == "cat") {
-                if (cmdArgs.size() < 2) {
-                    // Read from stdin if no file specified
-                    string line;
-                    while (getline(cin, line)) {
-                        cout << line << "\n";
-                    }
-                } else {
-                    for (size_t i = 1; i < cmdArgs.size(); ++i) {
-                        ifstream file(cmdArgs[i].c_str(), ios::binary);
-                        if (!file.is_open()) {
-                            cerr << "cat: " << cmdArgs[i] << ": No such file or directory\n";
-                            continue;
-                        }
-                        cout << file.rdbuf();
-                        file.close();
-                    }
+            } else if (cmd == "history") {
+                // Display command history
+                for (size_t i = 0; i < commandHistory.size(); ++i) {
+                    cout << "    " << (i + 1) << "  " << commandHistory[i] << "\n";
                 }
             }
 
@@ -508,7 +504,7 @@ int main() {
             continue;
         }
 
-        // Handle single command with output redirection (existing code)
+        // Handle single command with output redirection
         string redirectStdoutFile, redirectStderrFile;
         bool hasStdoutRedirect = false, hasStderrRedirect = false;
         bool appendStdout = false, appendStderr = false;
@@ -635,30 +631,13 @@ int main() {
                     }
                 }
             }
-        } else if (cmd == "cat") {
-            if (filteredArgs.size() < 2) {
-                if (hasStdoutRedirect && saved_stdout >= 0) {
-                    dup2(saved_stdout, STDOUT_FILENO);
-                    close(saved_stdout);
-                }
-                if (hasStderrRedirect && saved_stderr >= 0) {
-                    dup2(saved_stderr, STDERR_FILENO);
-                    close(saved_stderr);
-                }
-                tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-                continue;
-            }
-
-            for (size_t i = 1; i < filteredArgs.size(); ++i) {
-                ifstream file(filteredArgs[i].c_str(), ios::binary);
-                if (!file.is_open()) {
-                    cerr << "cat: " << filteredArgs[i] << ": No such file or directory\n";
-                    continue;
-                }
-                cout << file.rdbuf();
-                file.close();
+        } else if (cmd == "history") {
+            // Display command history
+            for (size_t i = 0; i < commandHistory.size(); ++i) {
+                cout << "    " << (i + 1) << "  " << commandHistory[i] << "\n";
             }
         } else {
+            // For non-builtin commands like "cat", execute normally
             executeCommand(filteredArgs);
         }
 
