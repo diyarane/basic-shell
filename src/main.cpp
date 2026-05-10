@@ -397,24 +397,48 @@ private:
     HistoryManager& history;
 
     void executeExternalCommand(const vector<string>& cmdArgs) {
-        string path = ShellUtils::findInPath(cmdArgs[0]);
-        if (path.empty()) {
-            cout << cmdArgs[0] << ": command not found\n";
-            return;
+        string path;
+        
+        // Check if command contains a path separator
+        if (cmdArgs[0].find('/') != string::npos) {
+            // This handles: ./forkdemo, /bin/ls, ../program, etc.
+            path = cmdArgs[0];
+            // Check if file exists and is executable
+            if (access(path.c_str(), F_OK) != 0) {
+                cout << cmdArgs[0] << ": No such file or directory\n";
+                return;
+            }
+            if (access(path.c_str(), X_OK) != 0) {
+                cout << cmdArgs[0] << ": Permission denied\n";
+                return;
+            }
+        } else {
+            // No slash - search in PATH
+            path = ShellUtils::findInPath(cmdArgs[0]);
+            if (path.empty()) {
+                cout << cmdArgs[0] << ": command not found\n";
+                return;
+            }
         }
 
         pid_t pid = fork();
         if (pid == 0) {
+            // Child process
             vector<char*> execArgs;
             for (const auto& arg : cmdArgs) {
                 execArgs.push_back(const_cast<char*>(arg.c_str()));
             }
             execArgs.push_back(nullptr);
+            
             execv(path.c_str(), execArgs.data());
+            // If we get here, execv failed
             perror("execv failed");
             exit(1);
         } else if (pid > 0) {
+            // Parent process
             waitpid(pid, nullptr, 0);
+        } else {
+            perror("fork failed");
         }
     }
 
