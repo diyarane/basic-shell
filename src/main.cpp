@@ -753,3 +753,8 @@ int main() {
     shell.run();
     return 0;
 }
+
+/*
+clang++ -std=c++11 -o myshell src/main.cpp
+./myshell
+*/
